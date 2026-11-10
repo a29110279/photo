@@ -1,0 +1,7 @@
+torch
+transformers
+pillow
+onnx
+onnxruntime
+sentencepiece
+protobuf
