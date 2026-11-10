@@ -57,3 +57,7 @@ dist/
 poc_report.md
 __pycache__/
 .venv/
+
+# Claude Code 本機設定：Graphify 寫入的 hook 含本機絕對路徑，不進版本控制
+.claude/settings.json
+.claude/settings.local.json
