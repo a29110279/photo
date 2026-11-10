@@ -1,9 +1,29 @@
+# 提示詞相簿（photo_prompt）
+
+Flutter（iOS / Android）App：以自然語言提示詞篩選相片與影片並整理成相簿，全裝置端運算。
+規劃見 `docs/project-evaluation.md`，實作範圍與架構見 `README.md`。
+
+- 提交前執行 `flutter analyze` 與 `flutter test`，兩者都要通過
+- 相片資料不得離開裝置；唯一允許的網路行為是下載模型
+- 不要把 API Key、Token 或本機絕對路徑寫進任何會提交的檔案
+
 ## 工具分工（優先於下方工具自動產生的指示）
 
-- 架構理解、文件與程式碼的關聯 → 先查 Graphify（`graphify-out/GRAPH_REPORT.md`）
-- 修改前的影響範圍、呼叫鏈追蹤、重構 → 用 GitNexus
-- 圖譜只是導航，結論一律以原始碼為準；圖譜與原始碼不一致時信原始碼
-- 不使用 `gitnexus wiki` 的雲端 LLM
+下方 graphify 與 GitNexus 兩段由工具自動產生，重跑工具時會被覆寫，請勿手動修改；兩段指示衝突時以本節為準。
+
+| 情境 | 使用 |
+| --- | --- |
+| 架構理解、「這個功能在哪／怎麼運作」、文件與程式碼的關聯 | Graphify（`graphify query` / `path` / `explain`） |
+| 修改既有的函式、類別、方法之前 | GitNexus `impact`（HIGH / CRITICAL 需先告知使用者） |
+| 追蹤呼叫鏈、除錯、重新命名與重構 | GitNexus（`context`、`rename`） |
+| 提交前 | 只跑 GitNexus `detect_changes`，再跑 `graphify update .` 更新圖譜 |
+
+- **「先查圖譜」只需擇一**：兩段都要求在文字搜尋前先查自己的圖譜，依上表選一個即可，不必兩個都查。
+- **文字搜尋不被禁止**：查完圖譜後，找字串常值、設定值、註解，或圖譜查無結果／回傳 `UNKNOWN` 時，直接用 grep。
+- **新增檔案不需 impact 分析**；impact 只針對修改既有符號。
+- **工具不可用時退回一般做法**：若 `graphify-out/graph.json` 或 `.gitnexus/` 不存在（兩者皆不進版本控制，例如雲端或 CI 環境），或指令無法執行，改用一般搜尋與閱讀原始碼，並在回覆中說明未做圖譜分析。不要為了滿足下方的 MUST / NEVER 而停止工作，也不要自行安裝工具。
+- **圖譜只是導航**：結論一律以原始碼為準；圖譜與原始碼不一致時信原始碼，並重建圖譜。
+- **不使用 `gitnexus wiki` 的雲端 LLM**。
 
 ## graphify
 
