@@ -69,15 +69,26 @@ class LocalStore {
   LocalStore(this.db);
   final Database db;
 
-  static const _version = 1;
+  static const _version = 2;
 
-  static Future<LocalStore> open(String path, {DatabaseFactory? factory}) async {
+  static Future<LocalStore> open(
+    String path, {
+    DatabaseFactory? factory,
+  }) async {
     final f = factory ?? databaseFactory;
     final db = await f.openDatabase(
       path,
       options: OpenDatabaseOptions(
         version: _version,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+        onUpgrade: (db, oldVersion, _) async {
+          if (oldVersion < 2) {
+            await db.execute(
+              'ALTER TABLE assets ADD COLUMN ocr_state INTEGER NOT NULL DEFAULT 0',
+            );
+            await _createV2Tables(db);
+          }
+        },
         onCreate: (db, _) async {
           await db.execute('''
 CREATE TABLE assets(
@@ -89,9 +100,12 @@ CREATE TABLE assets(
   lat REAL,
   lng REAL,
   index_state INTEGER NOT NULL DEFAULT 0,
-  model_version TEXT
+  model_version TEXT,
+  ocr_state INTEGER NOT NULL DEFAULT 0
 )''');
-          await db.execute('CREATE INDEX idx_assets_state ON assets(index_state, create_ts DESC)');
+          await db.execute(
+            'CREATE INDEX idx_assets_state ON assets(index_state, create_ts DESC)',
+          );
           await db.execute('''
 CREATE TABLE embeddings(
   asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
@@ -110,10 +124,34 @@ CREATE TABLE op_log(
   undone INTEGER NOT NULL DEFAULT 0
 )''');
           await db.execute('CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT)');
+          await _createV2Tables(db);
         },
       ),
     );
     return LocalStore(db);
+  }
+
+  /// v2：OCR 文字（O9）、智慧相簿（O5）。
+  static Future<void> _createV2Tables(Database db) async {
+    await db.execute('''
+CREATE TABLE ocr(
+  asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+  text TEXT NOT NULL
+)''');
+    await db.execute('''
+CREATE TABLE smart_albums(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  threshold REAL NOT NULL,
+  created_ts INTEGER NOT NULL
+)''');
+    await db.execute('''
+CREATE TABLE smart_album_items(
+  album_id INTEGER NOT NULL REFERENCES smart_albums(id) ON DELETE CASCADE,
+  asset_id TEXT NOT NULL,
+  PRIMARY KEY(album_id, asset_id)
+)''');
   }
 
   Future<void> close() => db.close();
@@ -125,11 +163,10 @@ CREATE TABLE op_log(
     return rows.isEmpty ? null : rows.first['value'] as String?;
   }
 
-  Future<void> setSetting(String key, String? value) => db.insert(
-        'kv',
-        {'key': key, 'value': value},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+  Future<void> setSetting(String key, String? value) => db.insert('kv', {
+    'key': key,
+    'value': value,
+  }, conflictAlgorithm: ConflictAlgorithm.replace);
 
   // ---- 媒體同步（增量） ----
 
@@ -137,7 +174,9 @@ CREATE TABLE op_log(
   /// 回傳 (新增或變更數, 移除數)。
   Future<(int, int)> syncAssets(List<AssetRecord> current) async {
     final rows = await db.query('assets', columns: ['id', 'modified_ts']);
-    final known = {for (final r in rows) r['id'] as String: r['modified_ts'] as int};
+    final known = {
+      for (final r in rows) r['id'] as String: r['modified_ts'] as int,
+    };
     final seen = <String>{};
     var changed = 0;
     final batch = db.batch();
@@ -164,11 +203,13 @@ CREATE TABLE op_log(
             'create_ts': a.createTs,
             'duration': a.duration,
             'index_state': IndexState.pending,
+            'ocr_state': IndexState.pending,
           },
           where: 'id = ?',
           whereArgs: [a.id],
         );
         batch.delete('embeddings', where: 'asset_id = ?', whereArgs: [a.id]);
+        batch.delete('ocr', where: 'asset_id = ?', whereArgs: [a.id]);
       }
     }
     final removed = known.keys.where((id) => !seen.contains(id)).toList();
@@ -183,7 +224,10 @@ CREATE TABLE op_log(
   // ---- 索引 ----
 
   /// 待索引清單（最近的優先）。模型版本不同者也視為待索引。
-  Future<List<AssetRecord>> pendingAssets(String modelVersion, {int limit = 50}) async {
+  Future<List<AssetRecord>> pendingAssets(
+    String modelVersion, {
+    int limit = 50,
+  }) async {
     final rows = await db.query(
       'assets',
       where: 'index_state = ? OR (index_state = ? AND model_version IS NOT ?)',
@@ -194,14 +238,15 @@ CREATE TABLE op_log(
     return rows.map(_toRecord).toList();
   }
 
-  Future<({int total, int done, int failed})> indexStats(String? modelVersion) async {
+  Future<({int total, int done, int failed})> indexStats(
+    String? modelVersion,
+  ) async {
     final r = (await db.rawQuery(
       'SELECT COUNT(*) AS total, '
       'SUM(CASE WHEN index_state = 1 AND model_version IS ? THEN 1 ELSE 0 END) AS done, '
       'SUM(CASE WHEN index_state = 2 THEN 1 ELSE 0 END) AS failed FROM assets',
       [modelVersion],
-    ))
-        .first;
+    )).first;
     return (
       total: r['total'] as int,
       done: (r['done'] as int?) ?? 0,
@@ -218,7 +263,11 @@ CREATE TABLE op_log(
     double? lng,
   }) async {
     await db.transaction((txn) async {
-      await txn.delete('embeddings', where: 'asset_id = ?', whereArgs: [assetId]);
+      await txn.delete(
+        'embeddings',
+        where: 'asset_id = ?',
+        whereArgs: [assetId],
+      );
       for (var i = 0; i < vectors.length; i++) {
         final v = vectors[i];
         await txn.insert('embeddings', {
@@ -243,23 +292,94 @@ CREATE TABLE op_log(
   }
 
   Future<void> markFailed(String assetId) => db.update(
-        'assets',
-        {'index_state': IndexState.failed},
-        where: 'id = ?',
-        whereArgs: [assetId],
-      );
+    'assets',
+    {'index_state': IndexState.failed},
+    where: 'id = ?',
+    whereArgs: [assetId],
+  );
 
   /// 將失敗或全部項目重設為待索引。
   Future<void> resetIndex({bool onlyFailed = false}) async {
     if (onlyFailed) {
-      await db.update('assets', {'index_state': IndexState.pending},
-          where: 'index_state = ?', whereArgs: [IndexState.failed]);
+      await db.update(
+        'assets',
+        {'index_state': IndexState.pending},
+        where: 'index_state = ?',
+        whereArgs: [IndexState.failed],
+      );
     } else {
       await db.delete('embeddings');
-      await db.update('assets', {'index_state': IndexState.pending, 'model_version': null});
+      await db.update('assets', {
+        'index_state': IndexState.pending,
+        'model_version': null,
+      });
     }
     _matrix = null;
   }
+
+  /// 已從裝置移除（例如移到垃圾桶）的項目，直接自資料庫刪除。
+  Future<void> removeAssets(Iterable<String> ids) async {
+    final batch = db.batch();
+    for (final id in ids) {
+      batch.delete('assets', where: 'id = ?', whereArgs: [id]);
+    }
+    await batch.commit(noResult: true);
+    _matrix = null;
+  }
+
+  // ---- OCR（O9） ----
+
+  /// 搜尋用的文字正規化：小寫、去除所有空白。
+  static String normalizeText(String s) =>
+      s.toLowerCase().replaceAll(RegExp(r'\s+'), '');
+
+  Future<List<AssetRecord>> pendingOcr({int limit = 50}) async {
+    final rows = await db.query(
+      'assets',
+      where: 'is_video = 0 AND ocr_state = ?',
+      whereArgs: [IndexState.pending],
+      orderBy: 'create_ts DESC',
+      limit: limit,
+    );
+    return rows.map(_toRecord).toList();
+  }
+
+  Future<({int total, int done})> ocrStats() async {
+    final r = (await db.rawQuery(
+      'SELECT COUNT(*) AS total, '
+      'SUM(CASE WHEN ocr_state <> 0 THEN 1 ELSE 0 END) AS done '
+      'FROM assets WHERE is_video = 0',
+    )).first;
+    return (total: r['total'] as int, done: (r['done'] as int?) ?? 0);
+  }
+
+  /// 寫入 OCR 結果；空字串也記為完成（代表圖中沒有文字）。
+  Future<void> saveOcr(String assetId, String text) async {
+    await db.transaction((txn) async {
+      final t = normalizeText(text);
+      if (t.isEmpty) {
+        await txn.delete('ocr', where: 'asset_id = ?', whereArgs: [assetId]);
+      } else {
+        await txn.insert('ocr', {
+          'asset_id': assetId,
+          'text': t,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await txn.update(
+        'assets',
+        {'ocr_state': IndexState.done},
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+    });
+  }
+
+  Future<void> markOcrFailed(String assetId) => db.update(
+    'assets',
+    {'ocr_state': IndexState.failed},
+    where: 'id = ?',
+    whereArgs: [assetId],
+  );
 
   // ---- 搜尋 ----
 
@@ -287,10 +407,39 @@ CREATE TABLE op_log(
       ids.add(r['asset_id'] as String);
       n++;
     }
-    final m = EmbeddingMatrix(dim, ids, Float32List.sublistView(data, 0, n * dim));
+    final m = EmbeddingMatrix(
+      dim,
+      ids,
+      Float32List.sublistView(data, 0, n * dim),
+    );
     _matrix = m;
     _matrixVersion = modelVersion;
     return m;
+  }
+
+  /// 單一 asset 的代表向量（多幀取平均後正規化）；尚未索引則回傳 null。
+  Future<Float32List?> assetVector(
+    String assetId,
+    String modelVersion,
+    int dim,
+  ) async {
+    final rows = await db.rawQuery(
+      'SELECT e.vec FROM embeddings e JOIN assets a ON a.id = e.asset_id '
+      'WHERE e.asset_id = ? AND a.model_version = ?',
+      [assetId, modelVersion],
+    );
+    final sum = Float32List(dim);
+    var n = 0;
+    for (final r in rows) {
+      final blob = r['vec'] as Uint8List;
+      if (blob.lengthInBytes != dim * 4) continue;
+      final v = Uint8List.fromList(blob).buffer.asFloat32List();
+      for (var i = 0; i < dim; i++) {
+        sum[i] += v[i];
+      }
+      n++;
+    }
+    return n == 0 ? null : l2Normalize(sum);
   }
 
   /// 依 metadata 條件過濾，回傳符合的 asset（新到舊）。
@@ -312,6 +461,12 @@ CREATE TABLE op_log(
       where.add('lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?');
       args.addAll([box.minLat, box.maxLat, box.minLng, box.maxLng]);
     }
+    for (final term in q.textTerms) {
+      final t = normalizeText(term);
+      if (t.isEmpty) continue;
+      where.add('id IN (SELECT asset_id FROM ocr WHERE instr(text, ?) > 0)');
+      args.add(t);
+    }
     final rows = await db.query(
       'assets',
       where: where.isEmpty ? null : where.join(' AND '),
@@ -321,21 +476,24 @@ CREATE TABLE op_log(
     var list = rows.map(_toRecord);
     final months = q.months;
     if (months != null) {
-      list = list.where((a) => months.contains(
-          DateTime.fromMillisecondsSinceEpoch(a.createTs * 1000).month));
+      list = list.where(
+        (a) => months.contains(
+          DateTime.fromMillisecondsSinceEpoch(a.createTs * 1000).month,
+        ),
+      );
     }
     return list.toList();
   }
 
   static AssetRecord _toRecord(Map<String, Object?> r) => AssetRecord(
-        id: r['id'] as String,
-        isVideo: r['is_video'] == 1,
-        createTs: r['create_ts'] as int,
-        modifiedTs: r['modified_ts'] as int,
-        duration: r['duration'] as int,
-        lat: (r['lat'] as num?)?.toDouble(),
-        lng: (r['lng'] as num?)?.toDouble(),
-      );
+    id: r['id'] as String,
+    isVideo: r['is_video'] == 1,
+    createTs: r['create_ts'] as int,
+    modifiedTs: r['modified_ts'] as int,
+    duration: r['duration'] as int,
+    lat: (r['lat'] as num?)?.toDouble(),
+    lng: (r['lng'] as num?)?.toDouble(),
+  );
 
   // ---- 操作日誌 ----
 
@@ -344,16 +502,15 @@ CREATE TABLE op_log(
     required String albumName,
     String? albumId,
     required List<OpItem> items,
-  }) =>
-      db.insert('op_log', {
-        'ts': DateTime.now().millisecondsSinceEpoch,
-        'kind': kind,
-        'album_name': albumName,
-        'album_id': albumId,
-        'items': jsonEncode([
-          for (final i in items) {'id': i.assetId, 'from': i.from},
-        ]),
-      });
+  }) => db.insert('op_log', {
+    'ts': DateTime.now().millisecondsSinceEpoch,
+    'kind': kind,
+    'album_name': albumName,
+    'album_id': albumId,
+    'items': jsonEncode([
+      for (final i in items) {'id': i.assetId, 'from': i.from},
+    ]),
+  });
 
   Future<List<OpLogEntry>> opLogs({int limit = 100}) async {
     final rows = await db.query('op_log', orderBy: 'id DESC', limit: limit);
@@ -369,15 +526,93 @@ CREATE TABLE op_log(
       db.update('op_log', {'undone': 1}, where: 'id = ?', whereArgs: [id]);
 
   static OpLogEntry _toLog(Map<String, Object?> r) => OpLogEntry(
-        id: r['id'] as int,
-        ts: DateTime.fromMillisecondsSinceEpoch(r['ts'] as int),
-        kind: r['kind'] as String,
-        albumName: r['album_name'] as String,
-        albumId: r['album_id'] as String?,
-        items: [
-          for (final m in jsonDecode(r['items'] as String) as List)
-            OpItem(m['id'] as String, m['from'] as String?),
-        ],
-        undone: r['undone'] == 1,
-      );
+    id: r['id'] as int,
+    ts: DateTime.fromMillisecondsSinceEpoch(r['ts'] as int),
+    kind: r['kind'] as String,
+    albumName: r['album_name'] as String,
+    albumId: r['album_id'] as String?,
+    items: [
+      for (final m in jsonDecode(r['items'] as String) as List)
+        OpItem(m['id'] as String, m['from'] as String?),
+    ],
+    undone: r['undone'] == 1,
+  );
+
+  // ---- 智慧相簿（O5） ----
+
+  Future<int> createSmartAlbum(String name, String prompt, double threshold) =>
+      db.insert('smart_albums', {
+        'name': name,
+        'prompt': prompt,
+        'threshold': threshold,
+        'created_ts': DateTime.now().millisecondsSinceEpoch,
+      });
+
+  Future<List<SmartAlbum>> smartAlbums() async {
+    final rows = await db.query('smart_albums', orderBy: 'id DESC');
+    return [
+      for (final r in rows)
+        SmartAlbum(
+          id: r['id'] as int,
+          name: r['name'] as String,
+          prompt: r['prompt'] as String,
+          threshold: (r['threshold'] as num).toDouble(),
+        ),
+    ];
+  }
+
+  Future<void> deleteSmartAlbum(int id) =>
+      db.delete('smart_albums', where: 'id = ?', whereArgs: [id]);
+
+  /// 已處理（已加入或已略過）的項目，不會再出現在待加入清單。
+  Future<Set<String>> smartAlbumProcessed(int albumId) async {
+    final rows = await db.query(
+      'smart_album_items',
+      columns: ['asset_id'],
+      where: 'album_id = ?',
+      whereArgs: [albumId],
+    );
+    return {for (final r in rows) r['asset_id'] as String};
+  }
+
+  Future<void> markSmartAlbumProcessed(
+    int albumId,
+    Iterable<String> ids,
+  ) async {
+    final batch = db.batch();
+    for (final id in ids) {
+      batch.insert('smart_album_items', {
+        'album_id': albumId,
+        'asset_id': id,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+    await batch.commit(noResult: true);
+  }
+}
+
+/// 智慧相簿規則：提示詞 + 門檻，符合的新項目可一鍵加入相簿。
+class SmartAlbum {
+  const SmartAlbum({
+    required this.id,
+    required this.name,
+    required this.prompt,
+    required this.threshold,
+  });
+
+  final int id;
+  final String name;
+  final String prompt;
+  final double threshold;
+
+  // 作為 provider family 的 key，需以內容比較。
+  @override
+  bool operator ==(Object other) =>
+      other is SmartAlbum &&
+      other.id == id &&
+      other.name == name &&
+      other.prompt == prompt &&
+      other.threshold == threshold;
+
+  @override
+  int get hashCode => Object.hash(id, name, prompt, threshold);
 }

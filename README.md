@@ -24,19 +24,28 @@ Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evalua
 | O2 相關度門檻滑桿 | 已實作 | `lib/ui/search_page.dart` |
 | O3 資料不離開裝置 | 設計原則 | — |
 | O4 規則式提示詞解析 | 已實作（搜尋流程必需，故提前） | `lib/services/query_parser.dart` |
-| O5 ~ O12、背景索引（workmanager / BGProcessingTask） | 未實作 | — |
+| O5 智慧相簿（儲存規則，新項目一鍵加入） | 已實作 | `lib/services/smart_album_service.dart`、`lib/ui/albums_page.dart` |
+| O6 重複／相似照片偵測 | 已實作 | `lib/services/duplicate_service.dart`、`lib/ui/cleanup_page.dart` |
+| O7 以圖搜圖 | 已實作 | `SearchService.searchByImage`、預覽頁「找相似」 |
+| O8 回饋學習（Rocchio） | 已實作 | `lib/services/vector_search.dart`、搜尋頁「依選取修正」 |
+| O9 OCR 文字搜尋 | 已實作（原生通道） | `lib/services/ocr_service.dart`、`MainActivity.kt`、`AppDelegate.swift` |
+| O10 ~ O12（Phase 3）、背景索引（workmanager / BGProcessingTask） | 未實作 | — |
 
 與評估文件的差異：
 
 - 資料庫用 `sqflite`（未用 `drift`），免去程式碼產生步驟。
 - Android 批次搬移直接使用 `photo_manager` 內建的 `moveAssetsToPath`（內部即 `MediaStore.createWriteRequest`，需 Android 11+），因此不需自寫 Platform Channel。
 - 地點過濾用內建離線地名表（`lib/services/gazetteer.dart`，約 50 個國家／城市的概略範圍），不呼叫平台 Geocoder，避免連網。
+- O5 智慧相簿無法完全自動加入：Android 搬移每次都需要系統授權框，因此改為索引後計算「待加入」數量，由使用者一鍵套用。
+- O9 OCR 不使用 `google_mlkit_text_recognition` 外掛（其 iOS 版只支援拉丁文字），改自寫原生通道：Android 用 ML Kit 中文辨識（bundled 模型，不需連網），iOS 用 Apple Vision（繁中、簡中、英文）。
+- O6 刪除改為移到系統垃圾桶（Android 11+）或「最近刪除」（iOS），由系統相簿復原，不列入 App 的操作紀錄。
 - 模型預設為 Chinese-CLIP（tokenizer 為 BERT WordPiece，可在 Dart 內實作）。若 PoC 結果改選其他模型，需替換 tokenizer。
 
 ## 驗證狀態
 
-- `flutter analyze` 無問題；`flutter test` 單元測試全數通過（解析器、tokenizer、向量比對、資料庫、混合搜尋）。
-- **尚未在實機或模擬器上執行**，也尚未建置 APK / IPA。權限、推論、相簿搬移等與平台相關的流程需在裝置上驗證。
+- `flutter analyze` 無問題；`flutter test` 38 個單元測試全數通過（解析器、tokenizer、向量比對、資料庫與 v1→v2 遷移、混合搜尋、以圖搜圖、Rocchio、相似分群、智慧相簿、OCR 文字比對）。
+- 原生 OCR 通道（Kotlin / Swift）**尚未編譯過**：這個開發環境沒有 Android SDK 與 Xcode。
+- **尚未在實機或模擬器上執行**，也尚未建置 APK / IPA（測試步驟見下方「實機測試清單」）。權限、推論、相簿搬移等與平台相關的流程需在裝置上驗證。
 - `tools/` 內的 Python 腳本只做過語法檢查，尚未實際跑過模型匯出。
 
 ## 開始使用
@@ -83,14 +92,36 @@ bash tools/dev_setup.sh
 
 只影響開發環境。執行後需人工合併兩個工具寫入 `CLAUDE.md` 的指示。
 
+## 實機測試清單
+
+單元測試只涵蓋純 Dart 邏輯；以下需在裝置上逐項確認（`flutter run --release`）：
+
+| # | 步驟 | 預期結果 |
+|---|---|---|
+| 1 | 首次開啟並授權（iOS 試「選取部分相片」） | 進入主畫面；設定頁顯示權限狀態 |
+| 2 | 設定 › 下載模型 → 中途關閉網路再開啟重試 | 從中斷處續傳，完成後顯示模型版本 |
+| 3 | 設定 › 開始索引 → 中途暫停、關閉 App 再開 | 再按「繼續」從斷點續做；最近的相片先完成 |
+| 4 | 搜尋「去年的影片」（不需模型） | 只出現去年的影片，依時間排序 |
+| 5 | 搜尋「海邊」、拖動相關度滑桿 | 分數由高到低；門檻提高結果變少 |
+| 6 | 選幾張 → 搬移／加入相簿 → 按「復原」 | Android 跳一次系統授權後檔案移到 `Pictures/<名稱>/`，復原後回原資料夾；iOS 加入相簿，復原後移出 |
+| 7 | 長按任一縮圖 → 右上「找相似」 | 回到搜尋頁顯示相似項目，不含自己；滑桿範圍變為 0~1 |
+| 8 | 搜尋結果中只勾選想要的 → 按「依選取修正」（調整圖示） | 結果重新排序，出現「已依選取修正」標籤 |
+| 9 | 搜尋後右上「存成智慧相簿」→ 拍一張新照片 → 設定 › 繼續索引 → 相簿 › 智慧相簿 | 新照片若符合條件，出現在待加入數量中；套用後不再重複提示 |
+| 10 | 整理 › 掃描（拍幾張連拍） | 連拍成群，預設保留最早一張；刪除後可在系統垃圾桶／最近刪除找回 |
+| 11 | 設定 › 開啟文字辨識 → 繼續索引 → 搜尋 `「發票」`（中文截圖） | 出現含該文字的相片；OCR 進度顯示在設定頁 |
+| 12 | 從 v1 版本升級安裝（已有索引資料） | 不需重新索引；OCR 狀態為未處理 |
+
+另外建議觀察：1 萬張索引的總時間與耗電、搜尋回應時間（目標 1 秒內）、相似分群在「全部比對」模式的耗時。
+
 ## 架構
 
 ```
 lib/
- ├─ ui/         搜尋、相簿、設定、預覽
+ ├─ ui/         搜尋、相簿（含智慧相簿、操作紀錄）、整理、設定、預覽
  ├─ state/      Riverpod providers / controllers
  ├─ services/   QueryParser、SearchService、IndexingService、
- │              EmbeddingService、ModelService、AlbumService
+ │              EmbeddingService、ModelService、AlbumService、
+ │              SmartAlbumService、DuplicateService、OcrService
  └─ data/       MediaRepository（photo_manager）、LocalStore（sqflite）
 ```
 

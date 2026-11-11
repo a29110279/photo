@@ -4,6 +4,7 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../state/providers.dart';
 import 'albums_page.dart';
+import 'cleanup_page.dart';
 import 'search_page.dart';
 import 'settings_page.dart';
 
@@ -13,9 +14,9 @@ class PhotoPromptApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     ThemeData theme(Brightness b) => ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal, brightness: b),
-          useMaterial3: true,
-        );
+      colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal, brightness: b),
+      useMaterial3: true,
+    );
     return MaterialApp(
       title: '提示詞相簿',
       theme: theme(Brightness.light),
@@ -33,11 +34,13 @@ class PermissionGate extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final perm = ref.watch(permissionProvider);
     return perm.when(
-      loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (e, _) => Scaffold(body: Center(child: Text('權限檢查失敗：$e'))),
       data: (state) {
         if (state.hasAccess) return const HomeShell();
-        final denied = state == PermissionState.denied ||
+        final denied =
+            state == PermissionState.denied ||
             state == PermissionState.restricted;
         return Scaffold(
           body: SafeArea(
@@ -48,8 +51,10 @@ class PermissionGate extends ConsumerWidget {
                 children: [
                   const Icon(Icons.photo_library_outlined, size: 72),
                   const SizedBox(height: 16),
-                  Text('需要相片存取權限',
-                      style: Theme.of(context).textTheme.headlineSmall),
+                  Text(
+                    '需要相片存取權限',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
                   const SizedBox(height: 8),
                   const Text(
                     '所有分析都在這台裝置上進行，相片與搜尋內容不會離開裝置。',
@@ -76,30 +81,39 @@ class PermissionGate extends ConsumerWidget {
   }
 }
 
-class HomeShell extends StatefulWidget {
+class HomeShell extends ConsumerWidget {
   const HomeShell({super.key});
 
   @override
-  State<HomeShell> createState() => _HomeShellState();
-}
-
-class _HomeShellState extends State<HomeShell> {
-  int _index = 0;
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final index = ref.watch(homeTabProvider);
     return Scaffold(
       body: IndexedStack(
-        index: _index,
-        children: const [SearchPage(), AlbumsPage(), SettingsPage()],
+        index: index,
+        children: const [
+          SearchPage(),
+          AlbumsPage(),
+          CleanupPage(),
+          SettingsPage(),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        selectedIndex: index,
+        onDestinationSelected: ref.read(homeTabProvider.notifier).go,
         destinations: const [
           NavigationDestination(icon: Icon(Icons.search), label: '搜尋'),
-          NavigationDestination(icon: Icon(Icons.photo_album_outlined), label: '相簿'),
-          NavigationDestination(icon: Icon(Icons.settings_outlined), label: '設定'),
+          NavigationDestination(
+            icon: Icon(Icons.photo_album_outlined),
+            label: '相簿',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.cleaning_services_outlined),
+            label: '整理',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            label: '設定',
+          ),
         ],
       ),
     );

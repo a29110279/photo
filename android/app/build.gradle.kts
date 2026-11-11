@@ -47,3 +47,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // OCR（O9）：bundled 版本，模型隨 App 打包，執行時不需下載。
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+}

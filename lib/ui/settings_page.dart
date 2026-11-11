@@ -35,6 +35,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final index = ref.watch(indexProvider);
     final perm = ref.watch(permissionProvider).value;
     final indexCtrl = ref.read(indexProvider.notifier);
+    final ocrOn = ref.watch(ocrEnabledProvider);
     final titleStyle = Theme.of(context).textTheme.titleMedium;
 
     // 模型就緒（或更換）後重新計算索引進度。
@@ -49,11 +50,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         children: [
           Text('語意模型', style: titleStyle),
           const SizedBox(height: 8),
-          Text(model.loading
-              ? '載入中…'
-              : model.ready
-                  ? '已安裝：${model.embedder!.version}'
-                  : '尚未安裝'),
+          Text(
+            model.loading
+                ? '載入中…'
+                : model.ready
+                ? '已安裝：${model.embedder!.version}'
+                : '尚未安裝',
+          ),
           const SizedBox(height: 8),
           TextField(
             controller: _url,
@@ -81,8 +84,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           if (model.error != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text(model.error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              child: Text(
+                model.error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
             ),
           const SizedBox(height: 4),
           Text(
@@ -97,18 +102,39 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             value: index.total == 0 ? 0 : index.done / index.total,
           ),
           const SizedBox(height: 4),
-          Text('已索引 ${index.done} / ${index.total}'
-              '${index.failed > 0 ? '（失敗 ${index.failed}）' : ''}'),
+          Text(
+            '已索引 ${index.done} / ${index.total}'
+            '${index.failed > 0 ? '（失敗 ${index.failed}）' : ''}',
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('文字辨識（OCR）'),
+            subtitle: Text(
+              ocrOn
+                  ? '已處理 ${index.ocrDone} / ${index.ocrTotal} 張相片。'
+                        '搜尋時用引號指定文字，例如：「發票」'
+                  : '可搜尋截圖、收據上的文字；會增加索引時間',
+            ),
+            value: ocrOn,
+            onChanged: index.running
+                ? null
+                : (v) async {
+                    await ref.read(ocrEnabledProvider.notifier).set(v);
+                    await indexCtrl.refresh();
+                  },
+          ),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             children: [
               if (index.running)
                 FilledButton.tonal(
-                    onPressed: indexCtrl.stop, child: const Text('暫停'))
+                  onPressed: indexCtrl.stop,
+                  child: const Text('暫停'),
+                )
               else
                 FilledButton(
-                  onPressed: model.ready ? indexCtrl.start : null,
+                  onPressed: model.ready || ocrOn ? indexCtrl.start : null,
                   child: Text(index.done > 0 ? '繼續／更新索引' : '開始索引'),
                 ),
               if (!index.running && index.failed > 0)
@@ -142,8 +168,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             children: [
               if (perm == PermissionState.limited)
                 OutlinedButton(
-                  onPressed:
-                      ref.read(permissionProvider.notifier).manageLimited,
+                  onPressed: ref
+                      .read(permissionProvider.notifier)
+                      .manageLimited,
                   child: const Text('調整可存取的相片'),
                 ),
               OutlinedButton(
@@ -165,11 +192,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         content: const Text('會刪除所有已計算的索引資料（不影響相片本身），之後需重新索引。'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('清除')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('清除'),
+          ),
         ],
       ),
     );

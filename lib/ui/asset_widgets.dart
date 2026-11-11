@@ -34,8 +34,9 @@ class AssetTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final entity = ref.watch(assetEntityProvider(assetId)).value;
     final scheme = Theme.of(context).colorScheme;
-    void preview() => Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) => ViewerPage(assetId: assetId)));
+    void preview() => Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => ViewerPage(assetId: assetId)),
+    );
 
     return GestureDetector(
       onTap: onTap ?? preview,
@@ -96,16 +97,18 @@ class _Chip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
-        decoration: BoxDecoration(
-          color: Colors.black54,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-          child: Text(text,
-              style: const TextStyle(color: Colors.white, fontSize: 11)),
-        ),
-      );
+    decoration: BoxDecoration(
+      color: Colors.black54,
+      borderRadius: BorderRadius.circular(4),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+      child: Text(
+        text,
+        style: const TextStyle(color: Colors.white, fontSize: 11),
+      ),
+    ),
+  );
 }
 
 /// 單一相片／影片預覽（C2）。
@@ -127,15 +130,30 @@ class ViewerPage extends ConsumerWidget {
               : entity.value!.createDateTime.toString().substring(0, 16),
           style: const TextStyle(fontSize: 16),
         ),
+        actions: [
+          if (ref.watch(modelProvider).ready)
+            IconButton(
+              tooltip: '找相似（以圖搜圖）',
+              icon: const Icon(Icons.image_search),
+              onPressed: () {
+                ref.read(searchProvider.notifier).searchByImage(assetId);
+                ref.read(homeTabProvider.notifier).go(0);
+                Navigator.of(context).popUntil((r) => r.isFirst);
+              },
+            ),
+        ],
       ),
       body: Center(
         child: entity.when(
           loading: () => const CircularProgressIndicator(),
-          error: (e, _) => Text('$e', style: const TextStyle(color: Colors.white)),
+          error: (e, _) =>
+              Text('$e', style: const TextStyle(color: Colors.white)),
           data: (e) {
             if (e == null) {
-              return const Text('找不到此項目',
-                  style: TextStyle(color: Colors.white));
+              return const Text(
+                '找不到此項目',
+                style: TextStyle(color: Colors.white),
+              );
             }
             if (e.type == AssetType.video) return _VideoView(entity: e);
             return InteractiveViewer(

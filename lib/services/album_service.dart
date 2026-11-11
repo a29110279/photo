@@ -4,8 +4,19 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../data/local_store.dart';
 
+/// 選取的項目都已在目標相簿中。
+class AlreadyInAlbumException implements Exception {
+  const AlreadyInAlbumException();
+  @override
+  String toString() => '選取的項目都已在此相簿';
+}
+
 class AlbumResult {
-  const AlbumResult({required this.logId, required this.count, required this.moved});
+  const AlbumResult({
+    required this.logId,
+    required this.count,
+    required this.moved,
+  });
   final int logId;
   final int count;
 
@@ -40,7 +51,10 @@ class AlbumService {
   Future<List<AssetPathEntity>> albums() =>
       PhotoManager.getAssetPathList(type: RequestType.common);
 
-  Future<AlbumResult> addToAlbum(String albumName, List<String> assetIds) async {
+  Future<AlbumResult> addToAlbum(
+    String albumName,
+    List<String> assetIds,
+  ) async {
     final name = albumName.trim();
     final entities = <AssetEntity>[];
     for (final id in assetIds) {
@@ -48,10 +62,15 @@ class AlbumService {
       if (e != null) entities.add(e);
     }
     if (entities.isEmpty) throw StateError('找不到選取的項目');
-    return Platform.isAndroid ? _moveAndroid(name, entities) : _addDarwin(name, entities);
+    return Platform.isAndroid
+        ? _moveAndroid(name, entities)
+        : _addDarwin(name, entities);
   }
 
-  Future<AlbumResult> _moveAndroid(String name, List<AssetEntity> entities) async {
+  Future<AlbumResult> _moveAndroid(
+    String name,
+    List<AssetEntity> entities,
+  ) async {
     final target = androidPath(name);
     final items = <OpItem>[];
     final toMove = <AssetEntity>[];
@@ -61,11 +80,17 @@ class AlbumService {
       items.add(OpItem(e.id, from));
       toMove.add(e);
     }
-    if (toMove.isEmpty) throw StateError('選取的項目都已在此相簿');
+    if (toMove.isEmpty) throw const AlreadyInAlbumException();
     // 先寫日誌再搬移：即使 App 在搬移途中被終止，仍保有原始位置可復原。
-    final logId = await store.addOpLog(kind: 'move', albumName: name, items: items);
-    final ok = await PhotoManager.editor.android
-        .moveAssetsToPath(entities: toMove, targetPath: target);
+    final logId = await store.addOpLog(
+      kind: 'move',
+      albumName: name,
+      items: items,
+    );
+    final ok = await PhotoManager.editor.android.moveAssetsToPath(
+      entities: toMove,
+      targetPath: target,
+    );
     if (!ok) {
       await store.markUndone(logId);
       throw StateError('搬移未完成（可能已取消系統授權）');
@@ -73,7 +98,10 @@ class AlbumService {
     return AlbumResult(logId: logId, count: toMove.length, moved: true);
   }
 
-  Future<AlbumResult> _addDarwin(String name, List<AssetEntity> entities) async {
+  Future<AlbumResult> _addDarwin(
+    String name,
+    List<AssetEntity> entities,
+  ) async {
     AssetPathEntity? album;
     for (final p in await albums()) {
       if (!p.isAll && p.name == name && p.albumType == 1) {
@@ -94,7 +122,11 @@ class AlbumService {
     }
     if (added.isEmpty) throw StateError('沒有項目被加入相簿');
     final logId = await store.addOpLog(
-        kind: 'add', albumName: name, albumId: album.id, items: added);
+      kind: 'add',
+      albumName: name,
+      albumId: album.id,
+      items: added,
+    );
     return AlbumResult(logId: logId, count: added.length, moved: false);
   }
 
@@ -113,8 +145,10 @@ class AlbumService {
         if (e != null) groups.putIfAbsent(from, () => []).add(e);
       }
       for (final g in groups.entries) {
-        final ok = await PhotoManager.editor.android
-            .moveAssetsToPath(entities: g.value, targetPath: g.key);
+        final ok = await PhotoManager.editor.android.moveAssetsToPath(
+          entities: g.value,
+          targetPath: g.key,
+        );
         if (!ok) throw StateError('復原未完成（可能已取消系統授權）');
       }
     } else {
@@ -130,7 +164,10 @@ class AlbumService {
         if (e != null) list.add(e);
       }
       if (list.isNotEmpty) {
-        final ok = await PhotoManager.editor.darwin.removeAssetsInAlbum(list, album);
+        final ok = await PhotoManager.editor.darwin.removeAssetsInAlbum(
+          list,
+          album,
+        );
         if (!ok) throw StateError('復原失敗');
       }
     }

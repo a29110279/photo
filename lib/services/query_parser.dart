@@ -13,6 +13,7 @@ class ParsedQuery {
     this.place,
     this.semantic = '',
     this.dateLabel,
+    this.textTerms = const [],
   });
 
   final String raw;
@@ -30,8 +31,15 @@ class ParsedQuery {
   final String semantic;
   final String? dateLabel;
 
+  /// 需出現在相片文字中的字詞（O9，以引號標示，例如「發票」）。
+  final List<String> textTerms;
+
   bool get hasFilter =>
-      from != null || months != null || kind != null || place != null;
+      from != null ||
+      months != null ||
+      kind != null ||
+      place != null ||
+      textTerms.isNotEmpty;
 }
 
 class QueryParser {
@@ -39,8 +47,18 @@ class QueryParser {
   final DateTime Function() _clock;
 
   static const _digits = {
-    '零': 0, '〇': 0, '一': 1, '二': 2, '兩': 2, '三': 3, '四': 4,
-    '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+    '零': 0,
+    '〇': 0,
+    '一': 1,
+    '二': 2,
+    '兩': 2,
+    '三': 3,
+    '四': 4,
+    '五': 5,
+    '六': 6,
+    '七': 7,
+    '八': 8,
+    '九': 9,
   };
   static const _num = r'(\d+|[零〇一二兩三四五六七八九十]+)';
 
@@ -77,6 +95,20 @@ class QueryParser {
     final now = _clock();
     final today = DateTime(now.year, now.month, now.day);
     var text = input.trim();
+
+    // 引號內的字詞視為 OCR 文字條件，先抽出避免被日期、地點規則誤判。
+    final textTerms = <String>[];
+    final quoteRe = RegExp('「([^」]+)」|『([^』]+)』|"([^"]+)"|“([^”]+)”');
+    text = text.replaceAllMapped(quoteRe, (m) {
+      final t = (m[1] ?? m[2] ?? m[3] ?? m[4])!.trim();
+      if (t.isNotEmpty) textTerms.add(t);
+      return ' ';
+    });
+    if (textTerms.isNotEmpty) {
+      text = text
+          .replaceAll(RegExp('(上面)?(寫著|寫有|印著|有)?\\s*(的)?(字樣|文字|字)'), ' ')
+          .replaceAll(RegExp('(寫著|寫有|印著)'), ' ');
+    }
     DateTime? from, to;
     Set<int>? months;
     String? dateLabel;
@@ -99,11 +131,11 @@ class QueryParser {
     }
 
     int? relYear(String w) => switch (w) {
-          '今年' => now.year,
-          '去年' => now.year - 1,
-          '前年' => now.year - 2,
-          _ => null,
-        };
+      '今年' => now.year,
+      '去年' => now.year - 1,
+      '前年' => now.year - 2,
+      _ => null,
+    };
 
     void applySeason(String s, int? year) {
       final ms = _seasons[s]!;
@@ -120,81 +152,91 @@ class QueryParser {
     // 規則依「越具體越優先」排列，只取第一個命中的日期。
     final matched =
         // 2023年5月3日 / 2023/5/3 / 2023-05-03
-        take(RegExp('$_num\\s*[年/\\-]\\s*$_num\\s*[月/\\-]\\s*$_num\\s*[日號]?'), (m) {
-              final y = parseNumber(m[1]!), mo = parseNumber(m[2]!), d = parseNumber(m[3]!);
-              if (y != null && mo != null && d != null) {
-                setRange(DateTime(y, mo, d), DateTime(y, mo, d + 1));
-              }
-            }) ||
-            // 去年夏天 / 2023年夏天
-            take(RegExp('(今年|去年|前年|$_num\\s*年)\\s*的?\\s*([春夏秋冬])[天季]'), (m) {
-              final y = relYear(m[1]!) ?? parseNumber(m[2]!);
-              applySeason(m[3]!, y);
-            }) ||
-            // 去年5月 / 2023年5月
-            take(RegExp('(今年|去年|前年|$_num\\s*年)\\s*的?\\s*$_num\\s*月份?'), (m) {
-              final y = relYear(m[1]!) ?? parseNumber(m[2]!);
-              final mo = parseNumber(m[3]!);
-              if (y != null && mo != null) {
-                setRange(DateTime(y, mo), DateTime(y, mo + 1));
-              }
-            }) ||
-            take(RegExp('(今年|去年|前年)'), (m) {
-              final y = relYear(m[1]!)!;
-              setRange(DateTime(y), DateTime(y + 1));
-            }) ||
-            // 三年前
-            take(RegExp('$_num\\s*年前'), (m) {
-              final n = parseNumber(m[1]!);
-              if (n != null) {
-                setRange(DateTime(now.year - n), DateTime(now.year - n + 1));
-              }
-            }) ||
-            // 2023年
-            take(RegExp('((?:19|20)\\d{2}|[一二][零〇九][零〇一二三四五六七八九]{2})\\s*年'), (m) {
-              final y = parseNumber(m[1]!);
-              if (y != null) setRange(DateTime(y), DateTime(y + 1));
-            }) ||
-            // 最近 / 過去 N 天|週|個月|年
-            take(RegExp('(?:最近|近|過去)\\s*$_num\\s*(天|日|週|周|星期|禮拜|個月|月|年)'), (m) {
-              final n = parseNumber(m[1]!);
-              if (n == null) return;
-              final end = today.add(const Duration(days: 1));
-              final start = switch (m[2]!) {
-                '天' || '日' => today.subtract(Duration(days: n)),
-                '個月' || '月' => DateTime(today.year, today.month - n, today.day),
-                '年' => DateTime(today.year - n, today.month, today.day),
-                _ => today.subtract(Duration(days: 7 * n)),
-              };
-              setRange(start, end);
-            }) ||
-            take(RegExp('上個?月'), (m) {
-              setRange(DateTime(now.year, now.month - 1), DateTime(now.year, now.month));
-            }) ||
-            take(RegExp('(這個?月|本月)'), (m) {
-              setRange(DateTime(now.year, now.month), DateTime(now.year, now.month + 1));
-            }) ||
-            take(RegExp('上(週|周|星期|禮拜)'), (m) {
-              final monday = today.subtract(Duration(days: today.weekday - 1));
-              setRange(monday.subtract(const Duration(days: 7)), monday);
-            }) ||
-            take(RegExp('(這|本)(週|周|星期|禮拜)'), (m) {
-              final monday = today.subtract(Duration(days: today.weekday - 1));
-              setRange(monday, monday.add(const Duration(days: 7)));
-            }) ||
-            take(RegExp('(今天|昨天|前天)'), (m) {
-              final back = const {'今天': 0, '昨天': 1, '前天': 2}[m[1]!]!;
-              final d = today.subtract(Duration(days: back));
-              setRange(d, d.add(const Duration(days: 1)));
-            }) ||
-            // 5月（無年份）：今年該月，若尚未到則視為去年
-            take(RegExp('$_num\\s*月份?'), (m) {
-              final mo = parseNumber(m[1]!);
-              if (mo == null || mo < 1 || mo > 12) return;
-              final y = mo > now.month ? now.year - 1 : now.year;
-              setRange(DateTime(y, mo), DateTime(y, mo + 1));
-            }) ||
-            take(RegExp('([春夏秋冬])[天季]'), (m) => applySeason(m[1]!, null));
+        take(RegExp('$_num\\s*[年/\\-]\\s*$_num\\s*[月/\\-]\\s*$_num\\s*[日號]?'), (
+          m,
+        ) {
+          final y = parseNumber(m[1]!),
+              mo = parseNumber(m[2]!),
+              d = parseNumber(m[3]!);
+          if (y != null && mo != null && d != null) {
+            setRange(DateTime(y, mo, d), DateTime(y, mo, d + 1));
+          }
+        }) ||
+        // 去年夏天 / 2023年夏天
+        take(RegExp('(今年|去年|前年|$_num\\s*年)\\s*的?\\s*([春夏秋冬])[天季]'), (m) {
+          final y = relYear(m[1]!) ?? parseNumber(m[2]!);
+          applySeason(m[3]!, y);
+        }) ||
+        // 去年5月 / 2023年5月
+        take(RegExp('(今年|去年|前年|$_num\\s*年)\\s*的?\\s*$_num\\s*月份?'), (m) {
+          final y = relYear(m[1]!) ?? parseNumber(m[2]!);
+          final mo = parseNumber(m[3]!);
+          if (y != null && mo != null) {
+            setRange(DateTime(y, mo), DateTime(y, mo + 1));
+          }
+        }) ||
+        take(RegExp('(今年|去年|前年)'), (m) {
+          final y = relYear(m[1]!)!;
+          setRange(DateTime(y), DateTime(y + 1));
+        }) ||
+        // 三年前
+        take(RegExp('$_num\\s*年前'), (m) {
+          final n = parseNumber(m[1]!);
+          if (n != null) {
+            setRange(DateTime(now.year - n), DateTime(now.year - n + 1));
+          }
+        }) ||
+        // 2023年
+        take(RegExp('((?:19|20)\\d{2}|[一二][零〇九][零〇一二三四五六七八九]{2})\\s*年'), (m) {
+          final y = parseNumber(m[1]!);
+          if (y != null) setRange(DateTime(y), DateTime(y + 1));
+        }) ||
+        // 最近 / 過去 N 天|週|個月|年
+        take(RegExp('(?:最近|近|過去)\\s*$_num\\s*(天|日|週|周|星期|禮拜|個月|月|年)'), (m) {
+          final n = parseNumber(m[1]!);
+          if (n == null) return;
+          final end = today.add(const Duration(days: 1));
+          final start = switch (m[2]!) {
+            '天' || '日' => today.subtract(Duration(days: n)),
+            '個月' || '月' => DateTime(today.year, today.month - n, today.day),
+            '年' => DateTime(today.year - n, today.month, today.day),
+            _ => today.subtract(Duration(days: 7 * n)),
+          };
+          setRange(start, end);
+        }) ||
+        take(RegExp('上個?月'), (m) {
+          setRange(
+            DateTime(now.year, now.month - 1),
+            DateTime(now.year, now.month),
+          );
+        }) ||
+        take(RegExp('(這個?月|本月)'), (m) {
+          setRange(
+            DateTime(now.year, now.month),
+            DateTime(now.year, now.month + 1),
+          );
+        }) ||
+        take(RegExp('上(週|周|星期|禮拜)'), (m) {
+          final monday = today.subtract(Duration(days: today.weekday - 1));
+          setRange(monday.subtract(const Duration(days: 7)), monday);
+        }) ||
+        take(RegExp('(這|本)(週|周|星期|禮拜)'), (m) {
+          final monday = today.subtract(Duration(days: today.weekday - 1));
+          setRange(monday, monday.add(const Duration(days: 7)));
+        }) ||
+        take(RegExp('(今天|昨天|前天)'), (m) {
+          final back = const {'今天': 0, '昨天': 1, '前天': 2}[m[1]!]!;
+          final d = today.subtract(Duration(days: back));
+          setRange(d, d.add(const Duration(days: 1)));
+        }) ||
+        // 5月（無年份）：今年該月，若尚未到則視為去年
+        take(RegExp('$_num\\s*月份?'), (m) {
+          final mo = parseNumber(m[1]!);
+          if (mo == null || mo < 1 || mo > 12) return;
+          final y = mo > now.month ? now.year - 1 : now.year;
+          setRange(DateTime(y, mo), DateTime(y, mo + 1));
+        }) ||
+        take(RegExp('([春夏秋冬])[天季]'), (m) => applySeason(m[1]!, null));
     if (!matched) dateLabel = null;
 
     // 媒體類型
@@ -231,6 +273,7 @@ class QueryParser {
       place: place,
       semantic: _cleanSemantic(text),
       dateLabel: dateLabel,
+      textTerms: textTerms,
     );
   }
 

@@ -35,15 +35,19 @@ class MediaRepository {
     final out = <AssetEntity>[];
     const pageSize = 500;
     for (var start = 0; start < count; start += pageSize) {
-      out.addAll(await all.getAssetListRange(
-          start: start, end: (start + pageSize).clamp(0, count)));
+      out.addAll(
+        await all.getAssetListRange(
+          start: start,
+          end: (start + pageSize).clamp(0, count),
+        ),
+      );
     }
     return out;
   }
 
   Future<List<AssetRecord>> allRecords() async => [
-        for (final a in await allAssets()) toRecord(a),
-      ];
+    for (final a in await allAssets()) toRecord(a),
+  ];
 
   static AssetRecord toRecord(AssetEntity a) {
     final hasGps = (a.latitude ?? 0) != 0 || (a.longitude ?? 0) != 0;
@@ -108,6 +112,39 @@ class MediaRepository {
       if (t != null) frames.add(t);
     }
     return frames;
+  }
+
+  /// 供 OCR 使用的較大縮圖，寫入暫存檔；呼叫端負責刪除。
+  Future<File?> ocrImageFile(AssetEntity a) async {
+    final data = await a.thumbnailDataWithSize(
+      const ThumbnailSize(1600, 1600),
+      quality: 90,
+    );
+    if (data == null) return null;
+    final dir = await Directory.systemTemp.createTemp('ocr');
+    return File('${dir.path}/image.jpg').writeAsBytes(data);
+  }
+
+  /// 移到系統垃圾桶（Android 11+）或「最近刪除」（iOS），皆可由系統相簿復原。
+  /// 系統會跳出確認框。回傳實際刪除的 id。
+  Future<List<String>> trash(List<String> ids) async {
+    if (Platform.isAndroid) {
+      final sdk =
+          int.tryParse(
+            RegExp(r'\d+').firstMatch(await PhotoManager.systemVersion())?[0] ??
+                '',
+          ) ??
+          0;
+      if (sdk >= 30) {
+        final entities = <AssetEntity>[];
+        for (final id in ids) {
+          final e = await AssetEntity.fromId(id);
+          if (e != null) entities.add(e);
+        }
+        return PhotoManager.editor.android.moveToTrash(entities);
+      }
+    }
+    return PhotoManager.editor.deleteWithIds(ids);
   }
 
   Future<File?> _localFile(AssetEntity a) async {
