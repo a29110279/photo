@@ -12,9 +12,12 @@ import java.io.File
 
 class MainActivity : FlutterActivity() {
     // 中文辨識器同時支援拉丁字母；模型隨 App 打包，不需連網。
-    private val recognizer: TextRecognizer by lazy {
-        TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
-    }
+    // 第一次使用時才建立，避免沒開 OCR 也載入模型。
+    private var recognizerInstance: TextRecognizer? = null
+    private val recognizer: TextRecognizer
+        get() = recognizerInstance
+            ?: TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+                .also { recognizerInstance = it }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -41,7 +44,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
-        recognizer.close()
+        recognizerInstance?.close()
         super.onDestroy()
     }
 }
