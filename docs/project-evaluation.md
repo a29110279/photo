@@ -46,7 +46,7 @@
 | 提示詞解析 | 裝置端規則式解析器 | 日期、地點、媒體類型關鍵字 → 結構化條件 |
 | Metadata | EXIF（日期、GPS）、媒體類型、影片長度 | GPS 需反向地理編碼（可用平台原生 Geocoder） |
 | 輔助辨識 | Google ML Kit（OCR、Face Detection、Image Labeling） | 皆為裝置端；人臉辨識需另接 MobileFaceNet |
-| 影片抽幀 | `video_thumbnail` 或原生 API | 每 N 秒抽一幀 |
+| 影片抽幀 | 原生 API（Android MediaMetadataRetriever、iOS AVAssetImageGenerator） | 每 N 秒抽一幀；`video_thumbnail` 已停止維護，無法用新版 Gradle 建置 |
 | 背景處理 | Isolate、`workmanager`（Android）、BGProcessingTask（iOS） | iOS 背景執行受限 |
 | 狀態管理 | Riverpod 或 Bloc | — |
 | 本地資料庫 | `drift`（SQLite） | 索引狀態、embedding、操作日誌、智慧相簿規則 |

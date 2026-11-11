@@ -2,9 +2,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:photo_manager/photo_manager.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
 
 import 'local_store.dart';
+import 'video_frames.dart';
 
 /// 裝置媒體存取（iOS PhotoKit / Android MediaStore）。
 class MediaRepository {
@@ -94,13 +94,8 @@ class MediaRepository {
       final step = total <= 0 ? 0 : (total * 1000) ~/ count;
       for (var i = 0; i < count; i++) {
         try {
-          final data = await VideoThumbnail.thumbnailData(
-            video: file.path,
-            imageFormat: ImageFormat.JPEG,
-            maxWidth: 448,
-            timeMs: i * step + (step ~/ 2),
-            quality: 85,
-          );
+          final data = await const VideoFrames()
+              .frameAt(file.path, i * step + (step ~/ 2));
           if (data != null) frames.add(data);
         } on Object {
           // 個別幀失敗不影響其他幀。
