@@ -2,6 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.personal.photoPrompt.index</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用於在裝置上分析並搜尋你的相片與影片，資料不會離開裝置。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

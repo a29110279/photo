@@ -13,7 +13,7 @@ Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evalua
 | C2 媒體瀏覽與預覽 | 已實作 | `lib/ui/albums_page.dart`、`lib/ui/asset_widgets.dart` |
 | C3 模型 PoC 腳本 | 已提供，**需自行執行** | `tools/poc/clip_poc.py` |
 | C4 裝置端 embedding 推論（ONNX Runtime） | 已實作 | `lib/services/embedding_service.dart` |
-| C5 索引管線（進度、斷點續做、增量更新） | 已實作（前景執行） | `lib/services/indexing_service.dart` |
+| C5 索引管線（自動執行、斷點續做、增量更新、背景索引） | 已實作 | `lib/services/indexing_service.dart`、`lib/background/background_indexing.dart` |
 | C6 Embedding 儲存與暴力比對 | 已實作 | `lib/data/local_store.dart`、`lib/services/vector_search.dart` |
 | C7 影片抽幀索引（多幀取最高分） | 已實作 | `lib/data/media_repository.dart` |
 | C8 Metadata 過濾（日期、類型、GPS） | 已實作 | `lib/data/local_store.dart` |
@@ -29,7 +29,7 @@ Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evalua
 | O7 以圖搜圖 | 已實作 | `SearchService.searchByImage`、預覽頁「找相似」 |
 | O8 回饋學習（Rocchio） | 已實作 | `lib/services/vector_search.dart`、搜尋頁「依選取修正」 |
 | O9 OCR 文字搜尋 | 已實作（原生通道） | `lib/services/ocr_service.dart`、`MainActivity.kt`、`AppDelegate.swift` |
-| O10 ~ O12（Phase 3）、背景索引（workmanager / BGProcessingTask） | 未實作 | — |
+| O10 ~ O12（Phase 3） | 未實作 | — |
 
 與評估文件的差異：
 
@@ -39,6 +39,8 @@ Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evalua
 - O5 智慧相簿無法完全自動加入：Android 搬移每次都需要系統授權框，因此改為索引後計算「待加入」數量，由使用者一鍵套用。
 - O9 OCR 不使用 `google_mlkit_text_recognition` 外掛（其 iOS 版只支援拉丁文字），改自寫原生通道：Android 用 ML Kit 中文辨識（bundled 模型，不需連網），iOS 用 Apple Vision（繁中、簡中、英文）。
 - O6 刪除改為移到系統垃圾桶（Android 11+）或「最近刪除」（iOS），由系統相簿復原，不列入 App 的操作紀錄。
+- 索引全自動：首次開啟即開始，之後每次開啟或回到前景只處理新增或修改的項目；App 在背景時由 WorkManager（Android）／BGProcessingTask（iOS）接手。背景引擎沒有 App 自寫的原生通道，因此**背景只處理相片**，影片抽幀與 OCR 留到 App 開啟時處理。
+- 索引加速：原生影像解碼、讀圖與推論並行、進度回報節流、GPS 於語意索引後才讀取。
 - 模型改為**包進 APK**（評估文件原為首次啟動下載）：不需公開空間與網路，代價是 APK 約數百 MB，每次更新都要重新下載整包。
 - 模型預設為 Chinese-CLIP（tokenizer 為 BERT WordPiece，可在 Dart 內實作）。若 PoC 結果改選其他模型，需替換 tokenizer。
 
@@ -113,7 +115,7 @@ bash tools/dev_setup.sh
 |---|---|---|
 | 1 | 首次開啟並授權（iOS 試「選取部分相片」） | 進入主畫面；設定頁顯示權限狀態 |
 | 2 | 首次開啟 App，看「設定 › 語意模型」 | 顯示準備進度，完成後為「已就緒」與模型版本；重開 App 不再重新準備 |
-| 3 | 設定 › 開始索引 → 中途暫停、關閉 App 再開 | 再按「繼續」從斷點續做；最近的相片先完成 |
+| 3 | 首次開啟 App 後看「設定 › 索引」；中途切到其他 App 一段時間再回來 | 自動開始索引，最近的相片先完成；在背景時進度仍會增加（Android 約每小時一次，iOS 由系統決定），回到前景後接著做 |
 | 4 | 搜尋「去年的影片」（不需模型） | 只出現去年的影片，依時間排序 |
 | 5 | 搜尋「海邊」、拖動相關度滑桿 | 分數由高到低；門檻提高結果變少 |
 | 6 | 選幾張 → 搬移／加入相簿 → 按「復原」 | Android 跳一次系統授權後檔案移到 `Pictures/<名稱>/`，復原後回原資料夾；iOS 加入相簿，復原後移出 |

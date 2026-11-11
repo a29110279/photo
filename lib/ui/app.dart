@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import '../background/background_indexing.dart';
 import '../state/providers.dart';
 import 'albums_page.dart';
 import 'cleanup_page.dart';
@@ -90,18 +93,49 @@ class HomeShell extends ConsumerStatefulWidget {
 
 class _HomeShellState extends ConsumerState<HomeShell> {
   late final AppLifecycleListener _lifecycle;
+  Timer? _heartbeat;
 
   @override
   void initState() {
     super.initState();
-    // 回到前景時重新讀取媒體庫，納入在其他 App 新增或刪除的相片。
+    _startHeartbeat();
     _lifecycle = AppLifecycleListener(
-      onResume: () => ref.read(indexProvider.notifier).resync(),
+      // 回到前景：接手索引，並納入在其他 App 新增或修改的相片。
+      onResume: () {
+        _startHeartbeat();
+        ref.read(indexProvider.notifier).autoIndex();
+      },
+      // 進入背景：停止前景索引，交給背景任務接著做。
+      onPause: () {
+        _stopHeartbeat();
+        ref.read(indexProvider.notifier).pause();
+        scheduleBackgroundIndexing().catchError((_) {});
+      },
     );
+  }
+
+  /// 前景心跳：背景索引看到最近的心跳就會停下，避免兩邊同時索引。
+  void _startHeartbeat() {
+    void beat() => ref
+        .read(storeProvider)
+        .setSetting(
+          SettingKeys.foregroundHeartbeat,
+          '${DateTime.now().millisecondsSinceEpoch}',
+        );
+    _heartbeat?.cancel();
+    beat();
+    _heartbeat = Timer.periodic(const Duration(seconds: 20), (_) => beat());
+  }
+
+  void _stopHeartbeat() {
+    _heartbeat?.cancel();
+    _heartbeat = null;
+    ref.read(storeProvider).setSetting(SettingKeys.foregroundHeartbeat, '0');
   }
 
   @override
   void dispose() {
+    _heartbeat?.cancel();
     _lifecycle.dispose();
     super.dispose();
   }
