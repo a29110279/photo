@@ -35,7 +35,7 @@ jobs:
           pip install -r tools/requirements.txt
 
       - name: Export
-        run: python tools/export_model.py --out dist/model --quantize
+        run: python tools/export_model.py --out dist/model --quantize --min-cos 0.96
 
       - name: Verify ONNX against PyTorch
         run: python tools/verify_model.py --model-dir dist/model --cases dist/tokenizer_cases.json
