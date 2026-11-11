@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """把 Chinese-CLIP 匯出成 App 使用的模型包（ONNX + vocab + manifest.json）。
 
+加上 --quantize 時會嘗試多種 int8 量化設定，與原始模型比對 cosine 相似度，
+各編碼器分別採用「通過門檻（--min-cos）中檔案最小」的版本；都不通過則保留 fp32。
+注意：比對在執行匯出的機器（CI 為 x86）上進行，手機（ARM）的量化數值可能略有差異。
+
 用法：
   python tools/export_model.py --out dist/model --quantize
   # 之後把 dist/model/ 內的 4 個檔案上傳到公開靜態空間（例如 GitHub Releases），
@@ -17,6 +21,8 @@ from pathlib import Path
 
 import torch
 from transformers import ChineseCLIPModel, ChineseCLIPProcessor
+
+from model_check import Reference
 
 CONTEXT_LENGTH = 52
 
@@ -43,6 +49,25 @@ class TextEncoder(torch.nn.Module):
         return out if isinstance(out, torch.Tensor) else out.pooler_output
 
 
+def _quant_candidates():
+    from onnxruntime.quantization import QuantType
+    return [
+        ("u8", dict(weight_type=QuantType.QUInt8)),
+        ("u8-reduce", dict(weight_type=QuantType.QUInt8, reduce_range=True)),
+        ("u8-matmul", dict(weight_type=QuantType.QUInt8, op_types_to_quantize=["MatMul"])),
+        ("u8-matmul-pc", dict(weight_type=QuantType.QUInt8, per_channel=True,
+                              reduce_range=True, op_types_to_quantize=["MatMul"])),
+    ]
+
+
+def quantize_dynamic(src, dst, **opts):
+    from onnxruntime.quantization import quantize_dynamic as q
+    q(src, dst, **opts)
+
+
+QUANT_CANDIDATES = []
+
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -55,9 +80,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("--model", default="OFA-Sys/chinese-clip-vit-base-patch16")
     ap.add_argument("--out", type=Path, default=Path("dist/model"))
-    ap.add_argument("--quantize", action="store_true", help="動態量化為 int8（檔案約縮為 1/4，準確度略降，需自行驗證）")
+    ap.add_argument("--quantize", action="store_true", help="嘗試 int8 量化，自動挑選通過門檻者")
+    ap.add_argument("--min-cos", type=float, default=0.97, help="量化版與原始模型的最低 cosine 門檻")
     ap.add_argument("--version", help="模型版本字串（預設由模型名稱產生）")
     args = ap.parse_args()
+    QUANT_CANDIDATES.extend(_quant_candidates() if args.quantize else [])
     args.out.mkdir(parents=True, exist_ok=True)
 
     model = ChineseCLIPModel.from_pretrained(args.model).eval()
@@ -76,26 +103,38 @@ def main():
             input_names=["text"], output_names=["text_features"], opset_version=17, dynamo=False)
 
     final = {"image": args.out / "image", "text": args.out / "text", "vocab": args.out / "vocab"}
+    chosen = {}
+    ref = Reference(model, processor, CONTEXT_LENGTH) if args.quantize else None
     for key in ("image", "text"):
-        if args.quantize:
-            from onnxruntime.quantization import QuantType, quantize_dynamic
-            # 只量化 MatMul（不動詞嵌入表 Gather），並逐通道量化：
-            # 預設的全模型 QUInt8 會讓文字編碼器偏離原模型過多（cosine 約 0.87~0.96）。
-            quantize_dynamic(
-                str(raw[key]),
-                str(final[key]),
-                weight_type=QuantType.QInt8,
-                per_channel=True,
-                op_types_to_quantize=["MatMul"],
-            )
-            raw[key].unlink()
-        else:
-            raw[key].replace(final[key])
+        chosen[key] = "fp32"
+        if ref is not None:
+            fp32_min = min(ref.scores(raw[key], key))
+            print(f"{key} fp32: min cos {fp32_min:.4f}")
+            best = None
+            for name, opts in QUANT_CANDIDATES:
+                out = args.out / f"{key}.{name}.onnx"
+                quantize_dynamic(str(raw[key]), str(out), **opts)
+                score = min(ref.scores(out, key))
+                size = out.stat().st_size
+                print(f"{key} {name}: min cos {score:.4f}, {size / 1e6:.0f} MB")
+                if score >= args.min_cos and (best is None or size < best[2]):
+                    if best is not None:
+                        best[1].unlink()
+                    best = (name, out, size, score)
+                else:
+                    out.unlink()
+            if best is not None:
+                chosen[key] = f"{best[0]} (cos {best[3]:.4f})"
+                best[1].replace(final[key])
+                raw[key].unlink()
+                continue
+        raw[key].replace(final[key])
+    print("採用：", chosen)
     vocab = dict(sorted(tok.get_vocab().items(), key=lambda kv: kv[1]))
     final["vocab"].write_text("\n".join(vocab.keys()) + "\n", encoding="utf-8")
 
-    version = args.version or (
-        args.model.split("/")[-1] + ("-int8" if args.quantize else "-fp32"))
+    tag = "-".join(v.split(" ")[0] for v in (chosen["image"], chosen["text"]))
+    version = args.version or f'{args.model.split("/")[-1]}-{tag}'
     manifest = {
         "version": version,
         "embeddingDim": model.config.projection_dim,
@@ -104,6 +143,7 @@ def main():
         "std": list(ip.image_std),
         "centerCrop": bool(getattr(ip, "do_center_crop", False)),
         "contextLength": CONTEXT_LENGTH,
+        "quantization": chosen,
         "files": {
             k: {"url": p.name, "sha256": sha256(p), "size": p.stat().st_size}
             for k, p in final.items()

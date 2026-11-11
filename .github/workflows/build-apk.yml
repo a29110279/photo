@@ -1,7 +1,7 @@
-# 在 GitHub 上建置 Android APK，完成後於該次執行的 Artifacts 下載。
+# 在 GitHub 上建置 Android APK（arm64，內建語意模型），完成後於該次執行的 Artifacts 下載。
+# 模型取自最近一次成功的 Export model workflow 產物。
 #
 # 選用設定（Settings › Secrets and variables › Actions）：
-#   Variables  MODEL_MANIFEST_URL         預設模型清單網址（不填則在 App 設定頁輸入）
 #   Secrets    ANDROID_KEYSTORE_BASE64    簽章金鑰（base64），未設定時用每次不同的 debug 金鑰
 #              ANDROID_KEYSTORE_PASSWORD
 #              ANDROID_KEY_ALIAS
@@ -12,17 +12,39 @@ on:
   push:
     branches: [claude/project-setup-implementation-p4mac3]
     paths-ignore: ['**.md', 'docs/**', 'tools/**', 'graphify-out/**']
+  # 模型重新匯出成功後自動重建。
+  workflow_run:
+    workflows: [Export model]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download bundled model
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow export-model.yml \
+            --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -z "$run_id" ]; then
+            echo "::error::找不到成功的 Export model 執行，請先到 Actions 執行 Export model。"
+            exit 1
+          fi
+          if ! gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n photo-prompt-model -D assets/model; then
+            echo "::error::無法下載模型產物（可能已過期），請重新執行 Export model。"
+            exit 1
+          fi
+          ls -l assets/model
 
       - uses: actions/setup-java@v4
         with:
@@ -58,15 +80,12 @@ jobs:
             echo "keyPassword=$KEY_PASSWORD"
           } > android/key.properties
 
+      # 模型約數百 MB，每個架構都會帶一份，因此只建置手機用的 arm64。
       - name: Build APK
-        env:
-          MODEL_MANIFEST_URL: ${{ vars.MODEL_MANIFEST_URL }}
-        run: |
-          flutter build apk --release --split-per-abi \
-            --dart-define=MODEL_MANIFEST_URL="$MODEL_MANIFEST_URL"
+        run: flutter build apk --release --target-platform android-arm64
 
       - uses: actions/upload-artifact@v4
         with:
           name: photo-prompt-apk-${{ github.run_number }}
-          path: build/app/outputs/flutter-apk/*-release.apk
+          path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 30

@@ -3,7 +3,7 @@
 以自然語言提示詞（例如「去年在日本拍的海邊影片」）篩選手機內的相片與影片，並把結果整理進相簿。
 Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evaluation.md](docs/project-evaluation.md)。
 
-**全裝置端運算**：相片與搜尋內容不離開裝置，唯一的網路行為是下載模型。
+**全裝置端運算**：相片與搜尋內容不離開裝置。語意模型內建於 App，Release 版不需要網路權限。
 
 ## 目前實作範圍
 
@@ -19,7 +19,7 @@ Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evalua
 | C8 Metadata 過濾（日期、類型、GPS） | 已實作 | `lib/data/local_store.dart` |
 | C9 / C10 建立相簿＋加入（iOS）／搬移（Android 批次授權） | 已實作 | `lib/services/album_service.dart` |
 | C11 多選、全選、反選 | 已實作 | `lib/ui/search_page.dart` |
-| C12 模型下載（斷點續傳、SHA-256、更新） | 已實作 | `lib/services/model_service.dart` |
+| C12 模型管理（內建於 APK，首次啟動解出、更新時換版） | 已實作 | `lib/services/model_service.dart` |
 | O1 搬移前預覽＋操作日誌＋復原 | 已實作 | `lib/services/album_service.dart` |
 | O2 相關度門檻滑桿 | 已實作 | `lib/ui/search_page.dart` |
 | O3 資料不離開裝置 | 設計原則 | — |
@@ -39,14 +39,15 @@ Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evalua
 - O5 智慧相簿無法完全自動加入：Android 搬移每次都需要系統授權框，因此改為索引後計算「待加入」數量，由使用者一鍵套用。
 - O9 OCR 不使用 `google_mlkit_text_recognition` 外掛（其 iOS 版只支援拉丁文字），改自寫原生通道：Android 用 ML Kit 中文辨識（bundled 模型，不需連網），iOS 用 Apple Vision（繁中、簡中、英文）。
 - O6 刪除改為移到系統垃圾桶（Android 11+）或「最近刪除」（iOS），由系統相簿復原，不列入 App 的操作紀錄。
+- 模型改為**包進 APK**（評估文件原為首次啟動下載）：不需公開空間與網路，代價是 APK 約數百 MB，每次更新都要重新下載整包。
 - 模型預設為 Chinese-CLIP（tokenizer 為 BERT WordPiece，可在 Dart 內實作）。若 PoC 結果改選其他模型，需替換 tokenizer。
 
 ## 驗證狀態
 
-- `flutter analyze` 無問題；`flutter test` 38 個單元測試全數通過（解析器、tokenizer、向量比對、資料庫與 v1→v2 遷移、混合搜尋、以圖搜圖、Rocchio、相似分群、智慧相簿、OCR 文字比對）。
-- 原生 OCR 通道（Kotlin / Swift）**尚未編譯過**：這個開發環境沒有 Android SDK 與 Xcode。
-- **尚未在實機或模擬器上執行**，也尚未建置 APK / IPA（測試步驟見下方「實機測試清單」）。權限、推論、相簿搬移等與平台相關的流程需在裝置上驗證。
-- `tools/` 內的 Python 腳本只做過語法檢查，尚未實際跑過模型匯出。
+- `flutter analyze` 無問題；`flutter test` 單元測試全數通過（解析器、tokenizer、向量比對、資料庫與遷移、混合搜尋、以圖搜圖、Rocchio、相似分群、智慧相簿、OCR 文字比對、內建模型解出）。
+- Android APK 已可由 GitHub Actions 建置（含 Kotlin 原生通道）；iOS 的 Swift 程式尚未編譯過。
+- 模型匯出在 CI 執行，並與原始 PyTorch 模型比對輸出；int8 量化的準確度仍在調整（見 Export model 的紀錄）。
+- 實機功能尚在驗證中（步驟見下方「實機測試清單」）。
 
 ## 開始使用
 
@@ -65,13 +66,13 @@ python tools/poc/clip_poc.py --images <相片資料夾> --prompts tools/poc/prom
 
 報告中的分數分布可用來校準預設相關度門檻（`lib/state/providers.dart` 的 `kDefaultThreshold`）。
 
-### 2. 匯出並發佈模型
+### 2. 匯出模型
 
-不需在本機安裝 Python：到 GitHub 的 **Actions › Export model › Run workflow**，
-完成後從該次執行的 Artifacts 下載 `photo-prompt-model-<編號>`。
-這個 workflow 會順便驗證 ONNX 與原始模型輸出一致，以及 Dart 版 tokenizer 與 Hugging Face 版相同。
+到 GitHub 的 **Actions › Export model › Run workflow**（修改匯出腳本並推送時也會自動執行）。
+它會匯出模型、自動挑選量化設定，並驗證 ONNX 輸出與原始模型一致、Dart 版 tokenizer 與 Hugging Face 版相同。
+成功後會自動觸發 Build APK，把模型打包進 APK。模型產物保留 90 天，過期後需重新執行。
 
-也可以在本機執行：
+也可以在本機執行（需 Python）：
 
 ```bash
 python tools/export_model.py --out dist/model --quantize
@@ -81,16 +82,18 @@ python tools/export_model.py --out dist/model --quantize
 python tools/verify_model.py --model-dir dist/model
 ```
 
-把 `dist/model/` 內的 `image`、`text`、`vocab`、`manifest.json` 放到同一層的公開靜態空間（例如 GitHub Releases）。
-模型檔不含任何金鑰，下載也不需要金鑰。
+### 3. 建置與安裝
 
-### 3. 安裝到裝置
+GitHub Actions 的 **Build APK** 會產出內建模型的 arm64 APK（Artifacts 內的 `app-release.apk`）。
+首次開啟時會花數十秒把模型從 APK 解出，之後直接使用。
+
+本機建置時，把模型的 4 個檔案（`image`、`text`、`vocab`、`manifest.json`）放到 `assets/model/`（不進版本控制），再執行：
 
 ```bash
-flutter run --release --dart-define=MODEL_MANIFEST_URL=<manifest.json 的網址>
+flutter run --release
 ```
 
-也可不帶 `--dart-define`，改在 App 的「設定」頁輸入網址。之後依序：下載模型 → 開始索引 → 搜尋。
+沒有放模型也能執行，只是只能用日期、地點、類型篩選。
 
 iOS 簽署方式（免費 Apple ID 每 7 天需重裝，或付費開發者帳號）見評估文件第 6 節。
 
@@ -109,7 +112,7 @@ bash tools/dev_setup.sh
 | # | 步驟 | 預期結果 |
 |---|---|---|
 | 1 | 首次開啟並授權（iOS 試「選取部分相片」） | 進入主畫面；設定頁顯示權限狀態 |
-| 2 | 設定 › 下載模型 → 中途關閉網路再開啟重試 | 從中斷處續傳，完成後顯示模型版本 |
+| 2 | 首次開啟 App，看「設定 › 語意模型」 | 顯示準備進度，完成後為「已就緒」與模型版本；重開 App 不再重新準備 |
 | 3 | 設定 › 開始索引 → 中途暫停、關閉 App 再開 | 再按「繼續」從斷點續做；最近的相片先完成 |
 | 4 | 搜尋「去年的影片」（不需模型） | 只出現去年的影片，依時間排序 |
 | 5 | 搜尋「海邊」、拖動相關度滑桿 | 分數由高到低；門檻提高結果變少 |
