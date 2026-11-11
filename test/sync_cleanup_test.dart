@@ -65,6 +65,34 @@ void main() {
     });
   });
 
+  test('索引中新增的向量直接附加到搜尋快取，重新索引才重載', () async {
+    await store.syncAssets([rec('a'), rec('b'), rec('c')]);
+    Float32List v(double x) => Float32List.fromList([x, 1 - x]);
+    await store.saveEmbeddings('a', [v(1)], 'm');
+    final m1 = await store.loadMatrix('m', 2);
+    expect(m1.rows, 1);
+
+    await store.saveEmbeddings('b', [v(0), v(0.5)], 'm');
+    final m2 = await store.loadMatrix('m', 2);
+    expect(identical(m1, m2), isTrue, reason: '沿用同一份快取');
+    expect(m2.rows, 3);
+    expect(m2.score(v(0))['b'], closeTo(1, 1e-6));
+
+    // 已在矩陣中的項目重新寫入 → 快取失效，重載後只剩新的向量。
+    await store.saveEmbeddings('a', [v(0)], 'm');
+    final m3 = await store.loadMatrix('m', 2);
+    expect(identical(m2, m3), isFalse);
+    expect(m3.rows, 3);
+    expect(m3.score(v(0))['a'], closeTo(1, 1e-6));
+
+    // 大量附加時會擴充容量，內容仍正確。
+    for (var i = 0; i < 2000; i++) {
+      m3.append('x$i', [v(i.isEven ? 1 : 0)]);
+    }
+    expect(m3.rows, 2003);
+    expect(m3.score(v(1))['x0'], closeTo(1, 1e-6));
+  });
+
   group('O10 整理', () {
     test('截圖旗標：新增時寫入，舊資料同步時補上', () async {
       await store.syncAssets([rec('a', ts: 2, shot: true), rec('b')]);

@@ -18,14 +18,35 @@ Float32List l2Normalize(Float32List v) {
 /// 記憶體內的 embedding 矩陣（已正規化），供暴力比對。
 /// 一個 asset 可有多列（影片多幀），搜尋時取最高分。
 class EmbeddingMatrix {
-  EmbeddingMatrix(this.dim, this.assetIds, this.data)
-    : assert(data.length == assetIds.length * dim);
+  EmbeddingMatrix(this.dim, List<String> assetIds, Float32List data)
+    : assert(data.length >= assetIds.length * dim),
+      _ids = List.of(assetIds),
+      _data = data;
 
   final int dim;
-  final List<String> assetIds;
-  final Float32List data;
+  final List<String> _ids;
+  Float32List _data;
 
-  int get rows => assetIds.length;
+  List<String> get assetIds => _ids;
+
+  /// 底層資料；長度可能大於 rows × dim（預留空間），只有前 rows 列有效。
+  Float32List get data => _data;
+
+  int get rows => _ids.length;
+
+  /// 附加一個 asset 的向量（索引進行中新增的項目），不必重新從資料庫載入整個矩陣。
+  void append(String assetId, List<Float32List> vectors) {
+    final need = (rows + vectors.length) * dim;
+    if (need > _data.length) {
+      final grown = Float32List(need * 2 > 1024 * dim ? need * 2 : 1024 * dim)
+        ..setRange(0, rows * dim, _data);
+      _data = grown;
+    }
+    for (final v in vectors) {
+      _data.setRange(rows * dim, (rows + 1) * dim, v);
+      _ids.add(assetId);
+    }
+  }
 
   /// 回傳每個 asset 的最高 cosine 相似度。[allow] 為候選集（null 表示全部）。
   Map<String, double> score(Float32List query, {Set<String>? allow}) {

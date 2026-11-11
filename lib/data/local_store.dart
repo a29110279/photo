@@ -372,7 +372,16 @@ CREATE TABLE people(
         whereArgs: [assetId],
       );
     });
-    _matrix = null;
+    // 新索引的項目直接附加到快取；重新索引（已在矩陣中）才整個重載。
+    final m = _matrix;
+    if (m != null &&
+        _matrixVersion == modelVersion &&
+        vectors.every((v) => v.length == m.dim) &&
+        !m.assetIds.contains(assetId)) {
+      m.append(assetId, vectors);
+    } else {
+      _matrix = null;
+    }
   }
 
   Future<int> videoCount() async =>
