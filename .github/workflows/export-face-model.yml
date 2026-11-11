@@ -1,0 +1,33 @@
+# 匯出人臉特徵模型（O12）。只能手動執行，不會觸發 APK 建置；
+# Build APK 會在存在此產物時一併打包。
+name: Export face model
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install --no-deps facenet-pytorch
+          pip install onnx onnxruntime numpy pillow requests tqdm
+      - name: Export and verify
+        run: python tools/export_face_model.py --out dist/face --quantize
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photo-prompt-face-model
+          path: |
+            dist/face/face
+            dist/face/face_manifest.json
+          retention-days: 90
