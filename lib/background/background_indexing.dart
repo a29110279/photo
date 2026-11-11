@@ -11,6 +11,7 @@ import '../data/local_store.dart';
 import '../data/media_repository.dart';
 import '../data/setting_keys.dart';
 import '../services/embedding_service.dart';
+import '../services/face_service.dart';
 import '../services/indexing_service.dart';
 import '../services/model_service.dart';
 
@@ -58,6 +59,7 @@ Future<void> runBackgroundIndexing() async {
   DartPluginRegistrant.ensureInitialized();
   final store = await LocalStore.open(await databasePath());
   EmbeddingService? embedder;
+  FaceService? faces;
   try {
     if (await _foregroundActive(store)) return;
     final perm = await PhotoManager.getPermissionState(
@@ -72,14 +74,19 @@ Future<void> runBackgroundIndexing() async {
         : await EmbeddingService.load(installed);
     // 影片抽幀與 OCR 的原生通道由本地外掛 native_media 提供，背景引擎也會註冊。
     final withOcr = await store.getSetting(SettingKeys.ocrEnabled) == '1';
+    if (await store.getSetting(SettingKeys.facesEnabled) == '1') {
+      faces = await FaceService.load(rootBundle, await modelDirPath());
+    }
     await IndexingService(store, const MediaRepository()).run(
       embedder,
       withOcr: withOcr,
+      faces: faces,
       timeBudget: _budget,
       shouldStop: () => _foregroundActive(store),
     );
   } finally {
     embedder?.dispose();
+    faces?.dispose();
     await store.close();
   }
 }

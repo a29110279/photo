@@ -53,6 +53,13 @@ jobs:
             echo "::error::無法下載模型產物（可能已過期），請重新執行 Export model。"
             exit 1
           fi
+          # 人臉模型（O12，選用）：有成功的 Export face model 產物才打包。
+          face_id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow export-face-model.yml \
+            --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -n "$face_id" ]; then
+            gh run download "$face_id" -R "$GITHUB_REPOSITORY" -n photo-prompt-face-model -D assets/model \
+              || echo "::warning::無法下載人臉模型（可能已過期），人物分群將無法使用。"
+          fi
           ls -l assets/model
 
       - uses: actions/setup-java@v4

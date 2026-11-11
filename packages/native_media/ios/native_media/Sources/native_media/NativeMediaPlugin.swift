@@ -5,7 +5,7 @@ import Vision
 
 /// App 自用的原生功能。做成外掛後，背景索引的 Flutter 引擎也會自動註冊。
 /// - photo_prompt/ocr：Apple Vision 文字辨識（繁中、簡中、英文）
-/// - photo_prompt/media：影片抽幀
+/// - photo_prompt/media：影片抽幀、人臉偵測
 public class NativeMediaPlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
     let messenger = registrar.messenger()
@@ -41,6 +41,10 @@ public class NativeMediaPlugin: NSObject, FlutterPlugin {
 
     let media = FlutterMethodChannel(name: "photo_prompt/media", binaryMessenger: messenger)
     media.setMethodCallHandler { call, result in
+      if call.method == "detectFaces" {
+        detectFaces(call.arguments as? [String: Any], result: result)
+        return
+      }
       guard call.method == "videoFrame",
             let args = call.arguments as? [String: Any],
             let path = args["path"] as? String
@@ -59,6 +63,31 @@ public class NativeMediaPlugin: NSObject, FlutterPlugin {
           .flatMap { UIImage(cgImage: $0).jpegData(compressionQuality: 0.85) }
         DispatchQueue.main.async {
           result(data.map { FlutterStandardTypedData(bytes: $0) })
+        }
+      }
+    }
+  }
+
+  /// 人臉偵測：回傳 [left, top, width, height]（0~1 比例，原點左上）的清單。
+  private static func detectFaces(_ args: [String: Any]?, result: @escaping FlutterResult) {
+    guard let path = args?["path"] as? String else {
+      result(FlutterError(code: "bad_args", message: "缺少 path", details: nil))
+      return
+    }
+    DispatchQueue.global(qos: .utility).async {
+      let request = VNDetectFaceRectanglesRequest()
+      let handler = VNImageRequestHandler(url: URL(fileURLWithPath: path), options: [:])
+      do {
+        try handler.perform([request])
+        // Vision 的座標原點在左下角，轉成左上角。
+        let boxes = (request.results ?? []).map { face -> [Double] in
+          let b = face.boundingBox
+          return [Double(b.minX), Double(1 - b.maxY), Double(b.width), Double(b.height)]
+        }
+        DispatchQueue.main.async { result(boxes) }
+      } catch {
+        DispatchQueue.main.async {
+          result(FlutterError(code: "face_failed", message: error.localizedDescription, details: nil))
         }
       }
     }

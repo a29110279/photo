@@ -7,6 +7,9 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetector
+import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
@@ -20,7 +23,7 @@ import java.util.concurrent.Executors
 /**
  * App 自用的原生功能。做成外掛後，背景索引的 Flutter 引擎也會自動註冊。
  * - photo_prompt/ocr：ML Kit 中文文字辨識（模型隨 App 打包，不需連網）
- * - photo_prompt/media：影片抽幀
+ * - photo_prompt/media：影片抽幀、人臉偵測
  */
 class NativeMediaPlugin : FlutterPlugin {
     private lateinit var context: Context
@@ -35,6 +38,16 @@ class NativeMediaPlugin : FlutterPlugin {
         get() = recognizerInstance
             ?: TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
                 .also { recognizerInstance = it }
+
+    private var faceDetectorInstance: FaceDetector? = null
+    private val faceDetector: FaceDetector
+        get() = faceDetectorInstance
+            ?: FaceDetection.getClient(
+                FaceDetectorOptions.Builder()
+                    .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                    .setMinFaceSize(0.08f)
+                    .build()
+            ).also { faceDetectorInstance = it }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
@@ -64,6 +77,10 @@ class NativeMediaPlugin : FlutterPlugin {
 
         mediaChannel = MethodChannel(binding.binaryMessenger, "photo_prompt/media").also {
             it.setMethodCallHandler { call, result ->
+                if (call.method == "detectFaces") {
+                    detectFaces(call.argument<String>("path"), result)
+                    return@setMethodCallHandler
+                }
                 if (call.method != "videoFrame") {
                     result.notImplemented()
                     return@setMethodCallHandler
@@ -101,6 +118,31 @@ class NativeMediaPlugin : FlutterPlugin {
         background = null
         recognizerInstance?.close()
         recognizerInstance = null
+        faceDetectorInstance?.close()
+        faceDetectorInstance = null
+    }
+
+    /** 人臉偵測：回傳 [left, top, width, height]（皆為 0~1 的比例）的清單。 */
+    private fun detectFaces(path: String?, result: MethodChannel.Result) {
+        if (path == null) {
+            result.error("bad_args", "缺少 path", null)
+            return
+        }
+        try {
+            val image = InputImage.fromFilePath(context, Uri.fromFile(File(path)))
+            val w = image.width.toDouble()
+            val h = image.height.toDouble()
+            faceDetector.process(image)
+                .addOnSuccessListener { faces ->
+                    result.success(faces.map {
+                        val b = it.boundingBox
+                        listOf(b.left / w, b.top / h, b.width() / w, b.height() / h)
+                    })
+                }
+                .addOnFailureListener { e -> result.error("face_failed", e.message, null) }
+        } catch (e: Exception) {
+            result.error("face_failed", e.message, null)
+        }
     }
 
     /** 取出指定時間附近的畫面，長邊縮到 maxSize，回傳 JPEG。 */

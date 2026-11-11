@@ -29,7 +29,9 @@ Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evalua
 | O7 以圖搜圖 | 已實作 | `SearchService.searchByImage`、預覽頁「找相似」 |
 | O8 回饋學習（Rocchio） | 已實作 | `lib/services/vector_search.dart`、搜尋頁「依選取修正」 |
 | O9 OCR 文字搜尋 | 已實作（原生通道） | `lib/services/ocr_service.dart`、`MainActivity.kt`、`AppDelegate.swift` |
-| O10 ~ O12（Phase 3） | 未實作 | — |
+| O10 截圖、螢幕錄影、模糊照片清理 | 已實作 | `lib/ui/cleanup_page.dart`（清晰度在索引時一併計算） |
+| O11 事件自動分群（時間 + GPS） | 已實作 | `lib/services/event_service.dart`、相簿 › 事件 |
+| O12 人物分群（選用，設定中開啟） | 已實作 | `lib/services/face_service.dart`、`lib/services/people_service.dart`、相簿 › 人物 |
 
 與評估文件的差異：
 
@@ -41,6 +43,7 @@ Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evalua
 - O6 刪除改為移到系統垃圾桶（Android 11+）或「最近刪除」（iOS），由系統相簿復原，不列入 App 的操作紀錄。
 - 索引全自動：首次開啟即開始，之後每次開啟或回到前景只處理新增或修改的項目；App 在背景時由 WorkManager（Android）／BGProcessingTask（iOS）接手。OCR 與影片抽幀的原生程式做成本地外掛 `packages/native_media`，背景引擎也能使用。
 - 索引加速：原生影像解碼、讀圖與推論並行、進度回報節流、GPS 於語意索引後才讀取。
+- O12 人臉偵測用平台原生 API（Android ML Kit、iOS Vision），人臉特徵用 facenet-pytorch 的 InceptionResnetV1（VGGFace2，int8 約 24 MB），由手動執行的 **Export face model** workflow 匯出；Build APK 找得到該產物時才會打包。人物命名後可在搜尋輸入名字；取相同名字可合併兩群。
 - 模型改為**包進 APK**（評估文件原為首次啟動下載）：不需公開空間與網路，代價是 APK 約數百 MB，每次更新都要重新下載整包。
 - 模型預設為 Chinese-CLIP（tokenizer 為 BERT WordPiece，可在 Dart 內實作）。若 PoC 結果改選其他模型，需替換 tokenizer。
 

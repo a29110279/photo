@@ -6,6 +6,7 @@ import '../data/local_store.dart';
 import '../data/media_repository.dart';
 import '../data/setting_keys.dart';
 import 'embedding_service.dart';
+import 'face_service.dart';
 import 'ocr_service.dart';
 
 class IndexProgress {
@@ -20,6 +21,8 @@ class IndexProgress {
     this.syncing = false,
     this.syncError,
     this.msPerItem,
+    this.faceTotal = 0,
+    this.faceDone = 0,
   });
   final int total;
   final int done;
@@ -42,6 +45,10 @@ class IndexProgress {
   /// 本次執行平均每個項目的耗時（毫秒）；尚無資料為 null。
   final int? msPerItem;
 
+  /// 人物分群（O12）：需偵測人臉的相片數與已處理數。
+  final int faceTotal;
+  final int faceDone;
+
   int get photos => total - videos;
 
   IndexProgress withSync({required bool syncing, String? error}) =>
@@ -56,6 +63,8 @@ class IndexProgress {
         syncing: syncing,
         syncError: error,
         msPerItem: msPerItem,
+        faceTotal: faceTotal,
+        faceDone: faceDone,
       );
 
   int get pending => total - done - failed;
@@ -111,7 +120,10 @@ class IndexingService {
   }) async {
     final s = await store.indexStats(modelVersion);
     final o = await store.ocrStats();
+    final f = await store.faceStats();
     return IndexProgress(
+      faceTotal: f.total,
+      faceDone: f.done,
       videos: await store.videoCount(),
       total: s.total,
       done: s.done,
@@ -129,6 +141,7 @@ class IndexingService {
   Future<bool> run(
     EmbeddingService? embedder, {
     bool withOcr = false,
+    FaceService? faces,
     bool doSync = true,
     bool photosOnly = false,
     void Function(IndexProgress)? onProgress,
@@ -148,7 +161,7 @@ class IndexingService {
 
     // 只在開始時查一次總數，之後以本地計數更新，並限制回報頻率。
     var base = const IndexProgress();
-    var done = 0, failed = 0, ocrDone = 0;
+    var done = 0, failed = 0, ocrDone = 0, faceDone = 0;
     final clock = Stopwatch();
     var timed = 0;
     var lastReport = DateTime.fromMillisecondsSinceEpoch(0);
@@ -165,6 +178,8 @@ class IndexingService {
           failed: base.failed + failed,
           ocrTotal: base.ocrTotal,
           ocrDone: base.ocrDone + ocrDone,
+          faceTotal: base.faceTotal,
+          faceDone: base.faceDone + faceDone,
           running: true,
           msPerItem: timed == 0 ? null : clock.elapsedMilliseconds ~/ timed,
         ),
@@ -240,6 +255,20 @@ class IndexingService {
         }
       }
 
+      // 人物分群（O12，選用）：偵測人臉並計算特徵。
+      if (faces != null) {
+        while (!await stopped()) {
+          final batch = await store.pendingFaces();
+          if (batch.isEmpty) break;
+          for (final rec in batch) {
+            await _faces(rec, faces);
+            faceDone++;
+            report();
+            if (await stopped()) break;
+          }
+        }
+      }
+
       if (withOcr && OcrService.supported) {
         while (!await stopped()) {
           final batch = await store.pendingOcr();
@@ -264,6 +293,8 @@ class IndexingService {
           failed: last.failed,
           ocrTotal: last.ocrTotal,
           ocrDone: last.ocrDone,
+          faceTotal: last.faceTotal,
+          faceDone: last.faceDone,
           msPerItem: timed == 0 ? null : clock.elapsedMilliseconds ~/ timed,
         ),
       );
@@ -319,6 +350,23 @@ class IndexingService {
       await store.saveSharpness(rec.id, p?.sharpness);
     } on Object {
       await store.saveSharpness(rec.id, null);
+    }
+  }
+
+  Future<void> _faces(AssetRecord rec, FaceService faces) async {
+    try {
+      final entity = await AssetEntity.fromId(rec.id);
+      final image = entity == null ? null : await media.faceImage(entity);
+      if (image == null) {
+        await store.saveFaces(rec.id, const [], failed: true);
+        return;
+      }
+      final found = await faces.process(image);
+      await store.saveFaces(rec.id, [
+        for (final f in found) (box: f.box.encode(), vec: f.vector),
+      ]);
+    } on Object {
+      await store.saveFaces(rec.id, const [], failed: true);
     }
   }
 

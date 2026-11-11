@@ -367,6 +367,7 @@ class _QueryChips extends StatelessWidget {
               : Icons.photo_outlined,
           q.kind == MediaKind.video ? '影片' : '相片',
         ),
+      if (q.person != null) (Icons.person_outline, q.person!),
       for (final t in q.textTerms) (Icons.text_fields, '文字「$t」'),
       if (q.semantic.isNotEmpty) (Icons.auto_awesome_outlined, q.semantic),
       if (result.refined) (Icons.tune, '已依選取修正'),

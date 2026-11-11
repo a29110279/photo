@@ -8,4 +8,8 @@ abstract final class SettingKeys {
   static const threshold = 'threshold';
   static const imageThreshold = 'image_threshold';
   static const ocrEnabled = 'ocr_enabled';
+  static const facesEnabled = 'faces_enabled';
+
+  /// 上次人物分群時的人臉數量與最大 id。
+  static const faceClusterStamp = 'face_cluster_stamp';
 }

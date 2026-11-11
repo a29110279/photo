@@ -14,8 +14,10 @@ import '../services/album_service.dart';
 import '../services/duplicate_service.dart';
 import '../services/embedding_service.dart';
 import '../services/event_service.dart';
+import '../services/face_service.dart';
 import '../services/indexing_service.dart';
 import '../services/model_service.dart';
+import '../services/people_service.dart';
 import '../services/search_service.dart';
 import '../services/smart_album_service.dart';
 
@@ -205,18 +207,40 @@ class IndexController extends Notifier<IndexProgress> {
     await ref.read(modelProvider.notifier).loaded;
     final embedder = ref.read(modelProvider).embedder;
     if (_svc.isRunning) return;
+    // 直接讀資料庫：開關的 provider 可能還沒載入完成。
+    final store = ref.read(storeProvider);
+    final withOcr = await store.getSetting(SettingKeys.ocrEnabled) == '1';
+    final withFaces = await store.getSetting(SettingKeys.facesEnabled) == '1';
+    FaceService? faces;
+    if (withFaces) {
+      try {
+        faces = await ref.read(faceServiceProvider.future);
+      } on Object {
+        faces = null;
+      }
+    }
+    if (_svc.isRunning) return;
     try {
       await _svc.run(
         embedder,
-        withOcr: ref.read(ocrEnabledProvider),
+        withOcr: withOcr,
+        faces: faces,
         doSync: false,
         onProgress: (p) => state = p,
       );
     } on Object {
       // 個別項目的錯誤已在服務內處理；其餘錯誤留待下次自動重試。
     } finally {
-      // 新索引的項目可能符合智慧相簿規則。
+      // 新索引的項目可能符合智慧相簿規則；新的人臉需要重新分群。
       ref.invalidate(smartAlbumPendingProvider);
+      if (faces != null) {
+        try {
+          await ref.read(peopleServiceProvider).recluster();
+        } on Object {
+          // 分群失敗不影響索引，人物頁開啟時會再試。
+        }
+        ref.invalidate(peopleProvider);
+      }
     }
   }
 
@@ -250,6 +274,43 @@ class OcrSettingController extends Notifier<bool> {
 
 final ocrEnabledProvider = NotifierProvider<OcrSettingController, bool>(
   OcrSettingController.new,
+);
+
+/// 人物分群開關（O12）：預設關閉，因為每張相片要多做人臉偵測。
+class FaceSettingController extends Notifier<bool> {
+  @override
+  bool build() {
+    Future.microtask(() async {
+      state =
+          await ref.read(storeProvider).getSetting(SettingKeys.facesEnabled) ==
+          '1';
+    });
+    return false;
+  }
+
+  Future<void> set(bool v) async {
+    state = v;
+    await ref
+        .read(storeProvider)
+        .setSetting(SettingKeys.facesEnabled, v ? '1' : '0');
+  }
+}
+
+final facesEnabledProvider = NotifierProvider<FaceSettingController, bool>(
+  FaceSettingController.new,
+);
+
+/// 內建的人臉模型；安裝檔未內建時為 null。
+final faceServiceProvider = FutureProvider<FaceService?>(
+  (ref) => FaceService.load(rootBundle, ref.watch(modelDirProvider)),
+);
+
+final peopleServiceProvider = Provider(
+  (ref) => PeopleService(ref.watch(storeProvider)),
+);
+
+final peopleProvider = FutureProvider.autoDispose<List<Person>>(
+  (ref) => ref.watch(peopleServiceProvider).people(),
 );
 
 // ---- 搜尋（C6/C8/C11/O2） ----

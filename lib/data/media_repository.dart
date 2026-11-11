@@ -155,6 +155,10 @@ class MediaRepository {
     return frames;
   }
 
+  /// 供人臉偵測使用的縮圖（O12）：人臉需要比語意索引更高的解析度。
+  Future<Uint8List?> faceImage(AssetEntity a) =>
+      a.thumbnailDataWithSize(const ThumbnailSize(720, 720), quality: 90);
+
   /// 供 OCR 使用的較大縮圖，寫入暫存檔；呼叫端負責刪除。
   Future<File?> ocrImageFile(AssetEntity a) async {
     final data = await a.thumbnailDataWithSize(

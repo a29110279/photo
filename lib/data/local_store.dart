@@ -77,7 +77,7 @@ class LocalStore {
   LocalStore(this.db);
   final Database db;
 
-  static const _version = 4;
+  static const _version = 5;
 
   static Future<LocalStore> open(
     String path, {
@@ -112,6 +112,12 @@ class LocalStore {
             );
             await db.execute('ALTER TABLE assets ADD COLUMN sharpness REAL');
           }
+          if (oldVersion < 5) {
+            await db.execute(
+              'ALTER TABLE assets ADD COLUMN face_state INTEGER NOT NULL DEFAULT 0',
+            );
+            await _createV5Tables(db);
+          }
         },
         onCreate: (db, _) async {
           await db.execute('''
@@ -128,7 +134,8 @@ CREATE TABLE assets(
   ocr_state INTEGER NOT NULL DEFAULT 0,
   gps_state INTEGER NOT NULL DEFAULT 0,
   screenshot INTEGER NOT NULL DEFAULT 0,
-  sharpness REAL
+  sharpness REAL,
+  face_state INTEGER NOT NULL DEFAULT 0
 )''');
           await db.execute(
             'CREATE INDEX idx_assets_state ON assets(index_state, create_ts DESC)',
@@ -152,6 +159,7 @@ CREATE TABLE op_log(
 )''');
           await db.execute('CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT)');
           await _createV2Tables(db);
+          await _createV5Tables(db);
         },
       ),
     );
@@ -178,6 +186,25 @@ CREATE TABLE smart_album_items(
   album_id INTEGER NOT NULL REFERENCES smart_albums(id) ON DELETE CASCADE,
   asset_id TEXT NOT NULL,
   PRIMARY KEY(album_id, asset_id)
+)''');
+  }
+
+  /// v5：人臉（O12）。cluster 為分群結果；people 以人臉 id 記住使用者取的名字，
+  /// 重新分群後名字跟著那張臉所在的群走。
+  static Future<void> _createV5Tables(Database db) async {
+    await db.execute('''
+CREATE TABLE faces(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+  box TEXT NOT NULL,
+  vec BLOB NOT NULL,
+  cluster INTEGER
+)''');
+    await db.execute('CREATE INDEX idx_faces_asset ON faces(asset_id)');
+    await db.execute('''
+CREATE TABLE people(
+  face_id INTEGER PRIMARY KEY REFERENCES faces(id) ON DELETE CASCADE,
+  name TEXT NOT NULL
 )''');
   }
 
@@ -246,12 +273,14 @@ CREATE TABLE smart_album_items(
             'gps_state': a.lat == null ? IndexState.pending : IndexState.done,
             'screenshot': a.screenshot ? 1 : 0,
             'sharpness': null,
+            'face_state': IndexState.pending,
           },
           where: 'id = ?',
           whereArgs: [a.id],
         );
         batch.delete('embeddings', where: 'asset_id = ?', whereArgs: [a.id]);
         batch.delete('ocr', where: 'asset_id = ?', whereArgs: [a.id]);
+        batch.delete('faces', where: 'asset_id = ?', whereArgs: [a.id]);
       } else if (shots.contains(a.id) != a.screenshot) {
         // 舊版資料庫升級後補上截圖旗標。
         batch.update(
@@ -387,6 +416,130 @@ CREATE TABLE smart_album_items(
     await batch.commit(noResult: true);
     _matrix = null;
   }
+
+  // ---- 人臉（O12） ----
+
+  /// 尚未偵測人臉的相片（最近的優先，不含截圖）。
+  Future<List<AssetRecord>> pendingFaces({int limit = 50}) async {
+    final rows = await db.query(
+      'assets',
+      where: 'is_video = 0 AND screenshot = 0 AND face_state = ?',
+      whereArgs: [IndexState.pending],
+      orderBy: 'create_ts DESC',
+      limit: limit,
+    );
+    return rows.map(_toRecord).toList();
+  }
+
+  Future<({int total, int done, int faces})> faceStats() async {
+    final r = (await db.rawQuery(
+      'SELECT COUNT(*) AS total, '
+      'SUM(CASE WHEN face_state <> 0 THEN 1 ELSE 0 END) AS done '
+      'FROM assets WHERE is_video = 0 AND screenshot = 0',
+    )).first;
+    final faces =
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM faces'),
+        ) ??
+        0;
+    return (
+      total: r['total'] as int,
+      done: (r['done'] as int?) ?? 0,
+      faces: faces,
+    );
+  }
+
+  /// 寫入一張相片的人臉（可為空），並標記為已偵測。
+  Future<void> saveFaces(
+    String assetId,
+    List<({String box, Float32List vec})> faces, {
+    bool failed = false,
+  }) async {
+    await db.transaction((txn) async {
+      await txn.delete('faces', where: 'asset_id = ?', whereArgs: [assetId]);
+      for (final f in faces) {
+        await txn.insert('faces', {
+          'asset_id': assetId,
+          'box': f.box,
+          'vec': f.vec.buffer.asUint8List(
+            f.vec.offsetInBytes,
+            f.vec.lengthInBytes,
+          ),
+        });
+      }
+      await txn.update(
+        'assets',
+        {'face_state': failed ? IndexState.failed : IndexState.done},
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+    });
+  }
+
+  /// 全部人臉（依 id 排序，分群結果才穩定）。
+  Future<
+    List<({int id, String assetId, String box, Float32List vec, int? cluster})>
+  >
+  allFaces() async {
+    final rows = await db.query('faces', orderBy: 'id ASC');
+    return [
+      for (final r in rows)
+        (
+          id: r['id'] as int,
+          assetId: r['asset_id'] as String,
+          box: r['box'] as String,
+          vec: Uint8List.fromList(r['vec'] as Uint8List).buffer.asFloat32List(),
+          cluster: r['cluster'] as int?,
+        ),
+    ];
+  }
+
+  Future<void> saveFaceClusters(Map<int, int> clusterByFace) async {
+    final batch = db.batch();
+    clusterByFace.forEach((face, cluster) {
+      batch.update(
+        'faces',
+        {'cluster': cluster},
+        where: 'id = ?',
+        whereArgs: [face],
+      );
+    });
+    await batch.commit(noResult: true);
+  }
+
+  /// 使用者取的名字：人臉 id → 名字。
+  Future<Map<int, String>> personNames() async => {
+    for (final r in await db.query('people'))
+      r['face_id'] as int: r['name'] as String,
+  };
+
+  /// 為人物命名：清掉 [faceIds] 原本的名字，再把名字記在 [anchors]
+  /// （每群一張代表臉）上；空字串表示移除名字。
+  /// 把不同群取相同名字，就等於把它們合併成同一人。
+  Future<void> namePerson(
+    List<int> faceIds,
+    List<int> anchors,
+    String name,
+  ) async {
+    await db.transaction((txn) async {
+      for (final id in faceIds) {
+        await txn.delete('people', where: 'face_id = ?', whereArgs: [id]);
+      }
+      if (name.trim().isEmpty) return;
+      for (final id in anchors) {
+        await txn.insert('people', {
+          'face_id': id,
+          'name': name.trim(),
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
+  /// 所有人物名稱（搜尋時比對用）。
+  Future<List<String>> personNameList() async => [
+    for (final r in await db.rawQuery('SELECT DISTINCT name FROM people'))
+      r['name'] as String,
+  ];
 
   // ---- 整理（O10） ----
 
@@ -593,6 +746,16 @@ CREATE TABLE smart_album_items(
     if (box != null) {
       where.add('lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?');
       args.addAll([box.minLat, box.maxLat, box.minLng, box.maxLng]);
+    }
+    final person = q.person;
+    if (person != null) {
+      // 人物（O12）：與被命名的人臉同一群的所有相片。
+      where.add(
+        'id IN (SELECT f2.asset_id FROM people p '
+        'JOIN faces f1 ON f1.id = p.face_id '
+        'JOIN faces f2 ON f2.cluster = f1.cluster WHERE p.name = ?)',
+      );
+      args.add(person);
     }
     for (final term in q.textTerms) {
       final t = normalizeText(term);

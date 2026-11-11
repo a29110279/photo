@@ -5,6 +5,7 @@ import 'package:photo_manager/photo_manager.dart';
 import '../data/local_store.dart';
 import '../services/album_service.dart';
 import '../services/event_service.dart';
+import '../services/people_service.dart';
 import '../state/providers.dart';
 import 'asset_widgets.dart';
 
@@ -15,7 +16,7 @@ class AlbumsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('相簿'),
@@ -31,9 +32,12 @@ class AlbumsPage extends ConsumerWidget {
             ),
           ],
           bottom: const TabBar(
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
             tabs: [
               Tab(text: '相簿'),
               Tab(text: '事件'),
+              Tab(text: '人物'),
               Tab(text: '智慧相簿'),
               Tab(text: '操作紀錄'),
             ],
@@ -43,6 +47,7 @@ class AlbumsPage extends ConsumerWidget {
           children: [
             _AlbumList(),
             _EventList(),
+            _PeopleList(),
             _SmartAlbumList(),
             _OpLogList(),
           ],
@@ -552,5 +557,201 @@ class EventPage extends ConsumerWidget {
     } on Object catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('$e')));
     }
+  }
+}
+
+// ---- 人物（O12） ----
+
+class _PeopleList extends ConsumerWidget {
+  const _PeopleList();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (!ref.watch(facesEnabledProvider)) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            '到「設定」開啟人物分群後，相片中的人物會在索引時自動分組。',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+    return ref
+        .watch(peopleProvider)
+        .when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('$e')),
+          data: (people) => people.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      '還沒有找到出現在 3 張以上相片的人物，索引完成後再來看看。',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : GridView.builder(
+                  padding: const EdgeInsets.all(8),
+                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 120,
+                    mainAxisSpacing: 8,
+                    crossAxisSpacing: 8,
+                    childAspectRatio: 0.78,
+                  ),
+                  itemCount: people.length,
+                  itemBuilder: (_, i) {
+                    final p = people[i];
+                    void open() => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => PersonPage(person: p),
+                      ),
+                    );
+                    return InkWell(
+                      onTap: open,
+                      child: Column(
+                        children: [
+                          AspectRatio(
+                            aspectRatio: 1,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: AssetTile(assetId: p.cover, onTap: open),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            p.name ?? '未命名',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            '${p.assetIds.length} 張',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+        );
+  }
+}
+
+/// 人物的相片；可命名（取相同名字即合併）、搜尋、建立相簿。
+class PersonPage extends ConsumerWidget {
+  const PersonPage({super.key, required this.person});
+  final Person person;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ids = person.assetIds;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(person.name ?? '未命名'),
+        actions: [
+          IconButton(
+            tooltip: '命名',
+            icon: const Icon(Icons.edit_outlined),
+            onPressed: () => _rename(context, ref),
+          ),
+          if (person.name != null)
+            IconButton(
+              tooltip: '在搜尋頁以此人物搜尋',
+              icon: const Icon(Icons.search),
+              onPressed: () {
+                ref.read(searchProvider.notifier).search(person.name!);
+                ref.read(homeTabProvider.notifier).go(0);
+                Navigator.of(context).popUntil((r) => r.isFirst);
+              },
+            ),
+        ],
+      ),
+      body: GridView.builder(
+        padding: const EdgeInsets.all(2),
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 130,
+          mainAxisSpacing: 2,
+          crossAxisSpacing: 2,
+        ),
+        itemCount: ids.length,
+        itemBuilder: (_, i) =>
+            AssetTile(key: ValueKey(ids[i]), assetId: ids[i]),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        icon: const Icon(Icons.create_new_folder_outlined),
+        label: Text(AlbumService.movesFiles ? '搬移成相簿' : '建立相簿'),
+        onPressed: () async {
+          final name = person.name ?? '人物';
+          final messenger = ScaffoldMessenger.of(context);
+          try {
+            final r = await ref
+                .read(albumServiceProvider)
+                .addToAlbum(name, ids);
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text(
+                  '已${r.moved ? '搬移' : '加入'} ${r.count} 個項目到「$name」，可從操作紀錄復原',
+                ),
+              ),
+            );
+            ref.invalidate(opLogProvider);
+            ref.invalidate(albumsProvider);
+          } on Object catch (e) {
+            messenger.showSnackBar(SnackBar(content: Text('$e')));
+          }
+        },
+      ),
+    );
+  }
+
+  Future<void> _rename(BuildContext context, WidgetRef ref) async {
+    final controller = TextEditingController(text: person.name ?? '');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('人物名稱'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: '名稱'),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '取和另一位人物相同的名字，會把兩者合併。清空名稱即取消命名。'
+              '命名後可在搜尋輸入名字，例如「小明 海邊」。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('儲存'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (name == null) return;
+    final trimmed = name.trim();
+    if (trimmed.isNotEmpty && AlbumService.validateName(trimmed) != null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('名稱含有不允許的字元')));
+      }
+      return;
+    }
+    await ref.read(peopleServiceProvider).rename(person, trimmed);
+    ref.invalidate(peopleProvider);
+    if (context.mounted) Navigator.pop(context);
   }
 }

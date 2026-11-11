@@ -14,6 +14,7 @@ class ParsedQuery {
     this.semantic = '',
     this.dateLabel,
     this.textTerms = const [],
+    this.person,
   });
 
   final String raw;
@@ -34,7 +35,24 @@ class ParsedQuery {
   /// 需出現在相片文字中的字詞（O9，以引號標示，例如「發票」）。
   final List<String> textTerms;
 
+  /// 人物名稱（O12），由 SearchService 比對已命名的人物後填入。
+  final String? person;
+
+  ParsedQuery withPerson(String name) => ParsedQuery(
+    raw: raw,
+    from: from,
+    to: to,
+    months: months,
+    kind: kind,
+    place: place,
+    semantic: semantic,
+    dateLabel: dateLabel,
+    textTerms: textTerms,
+    person: name,
+  );
+
   bool get hasFilter =>
+      person != null ||
       from != null ||
       months != null ||
       kind != null ||

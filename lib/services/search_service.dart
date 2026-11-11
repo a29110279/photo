@@ -59,7 +59,7 @@ class SearchService {
     String? modelVersion,
     int dim = 0,
   }) async {
-    final q = parser.parse(input);
+    final q = await _parseWithPerson(input);
     final candidates = await store.filterAssets(q);
 
     if (q.semantic.isEmpty || embedText == null || modelVersion == null) {
@@ -72,6 +72,19 @@ class SearchService {
     if (vec == null) return SearchResult(q, const []);
     final hits = await _rank(vec, candidates, q.hasFilter, modelVersion, dim);
     return SearchResult(q, hits, queryVector: vec);
+  }
+
+  /// 提示詞中出現已命名的人物（O12）時，抽出名字作為人物條件。
+  Future<ParsedQuery> _parseWithPerson(String input) async {
+    final names = await store.personNameList()
+      ..sort((a, b) => b.length.compareTo(a.length));
+    for (final name in names) {
+      final i = input.indexOf(name);
+      if (i < 0) continue;
+      final rest = input.replaceRange(i, i + name.length, ' ');
+      return parser.parse(rest).withPerson(name);
+    }
+    return parser.parse(input);
   }
 
   /// 以圖搜圖（O7）：以該項目的向量為查詢，排除自己。

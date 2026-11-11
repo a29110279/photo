@@ -14,6 +14,7 @@ class SettingsPage extends ConsumerWidget {
     final model = ref.watch(modelProvider);
     final perm = ref.watch(permissionProvider).value;
     final ocrOn = ref.watch(ocrEnabledProvider);
+    final facesOn = ref.watch(facesEnabledProvider);
     final theme = Theme.of(context);
     final titleStyle = theme.textTheme.titleMedium;
     final small = theme.textTheme.bodySmall;
@@ -76,6 +77,25 @@ class SettingsPage extends ConsumerWidget {
             value: ocrOn,
             onChanged: (v) async {
               await ref.read(ocrEnabledProvider.notifier).set(v);
+              if (v) {
+                await ref.read(indexProvider.notifier).autoIndex();
+              } else {
+                await ref.read(indexProvider.notifier).refresh();
+              }
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('人物分群'),
+            subtitle: Text(
+              facesOn
+                  ? '已處理 ${index.faceDone} / ${index.faceTotal} 張相片。'
+                        '結果在「相簿 › 人物」，命名後可直接搜尋名字'
+                  : '辨識相片中的人臉並依人物分組；會增加索引時間',
+            ),
+            value: facesOn,
+            onChanged: (v) async {
+              await ref.read(facesEnabledProvider.notifier).set(v);
               if (v) {
                 await ref.read(indexProvider.notifier).autoIndex();
               } else {

@@ -55,4 +55,6 @@ kotlin {
 dependencies {
     // OCR：bundled 版本，模型隨 App 打包，執行時不需下載。
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+    // 人臉偵測（O12）：bundled 版本，不需連網。
+    implementation("com.google.mlkit:face-detection:16.1.7")
 }
