@@ -96,6 +96,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const Divider(height: 32),
+          Text('媒體庫', style: titleStyle),
+          const SizedBox(height: 8),
+          Text(
+            index.syncing
+                ? '讀取中…'
+                : '相片 ${index.photos} 張、影片 ${index.videos} 部',
+          ),
+          if (index.syncError != null)
+            Text(
+              '讀取失敗：${index.syncError}',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: index.syncing || index.running ? null : indexCtrl.resync,
+            icon: const Icon(Icons.sync),
+            label: const Text('重新讀取媒體庫'),
+          ),
+          const Divider(height: 32),
           Text('索引', style: titleStyle),
           const SizedBox(height: 8),
           LinearProgressIndicator(

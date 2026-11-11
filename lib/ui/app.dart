@@ -81,11 +81,71 @@ class PermissionGate extends ConsumerWidget {
   }
 }
 
-class HomeShell extends ConsumerWidget {
+class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends ConsumerState<HomeShell> {
+  late final AppLifecycleListener _lifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    // 回到前景時重新讀取媒體庫，納入在其他 App 新增或刪除的相片。
+    _lifecycle = AppLifecycleListener(
+      onResume: () => ref.read(indexProvider.notifier).resync(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
+
+  /// 模型尚未安裝且已知下載網址時，首次開啟詢問是否下載（只問一次）。
+  Future<void> _maybePromptModel() async {
+    final model = ref.read(modelProvider);
+    if (model.loading || model.ready || model.progress != null) return;
+    final store = ref.read(storeProvider);
+    if (await store.getSetting(SettingKeys.modelPrompted) != null) return;
+    final url = await ref.read(modelProvider.notifier).manifestUrl();
+    if (url.isEmpty || !mounted) return;
+    await store.setSetting(SettingKeys.modelPrompted, '1');
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('下載語意模型？'),
+        content: const Text(
+          '用文字描述搜尋相片（例如「海邊夕陽」）需要先下載模型，約數百 MB，建議使用 Wi-Fi。\n\n'
+          '這是 App 唯一的網路行為，相片不會上傳。之後也可以在「設定」下載。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('稍後'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('下載'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    ref.read(homeTabProvider.notifier).go(3);
+    await ref.read(modelProvider.notifier).download(url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen(modelProvider.select((m) => m.loading), (was, now) {
+      if (was == true && !now) _maybePromptModel();
+    });
     final index = ref.watch(homeTabProvider);
     return Scaffold(
       body: IndexedStack(

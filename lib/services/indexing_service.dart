@@ -15,6 +15,9 @@ class IndexProgress {
     this.running = false,
     this.ocrTotal = 0,
     this.ocrDone = 0,
+    this.videos = 0,
+    this.syncing = false,
+    this.syncError,
   });
   final int total;
   final int done;
@@ -24,6 +27,30 @@ class IndexProgress {
   /// OCR 只處理相片。
   final int ocrTotal;
   final int ocrDone;
+
+  /// 媒體庫中的影片數（相片數 = total - videos）。
+  final int videos;
+
+  /// 正在讀取裝置媒體庫。
+  final bool syncing;
+
+  /// 最近一次讀取媒體庫失敗的原因。
+  final String? syncError;
+
+  int get photos => total - videos;
+
+  IndexProgress withSync({required bool syncing, String? error}) =>
+      IndexProgress(
+        total: total,
+        done: done,
+        failed: failed,
+        running: running,
+        ocrTotal: ocrTotal,
+        ocrDone: ocrDone,
+        videos: videos,
+        syncing: syncing,
+        syncError: error,
+      );
 
   int get pending => total - done - failed;
   int get ocrPending => ocrTotal - ocrDone;
@@ -54,6 +81,7 @@ class IndexingService {
     final s = await store.indexStats(modelVersion);
     final o = await store.ocrStats();
     return IndexProgress(
+      videos: await store.videoCount(),
       total: s.total,
       done: s.done,
       failed: s.failed,

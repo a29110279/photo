@@ -15,6 +15,7 @@ import '../services/smart_album_service.dart';
 const kDefaultManifestUrl = String.fromEnvironment('MODEL_MANIFEST_URL');
 
 abstract final class SettingKeys {
+  static const modelPrompted = 'model_prompted';
   static const manifestUrl = 'manifest_url';
   static const threshold = 'threshold';
   static const imageThreshold = 'image_threshold';
@@ -174,23 +175,37 @@ class IndexController extends Notifier<IndexProgress> {
   @override
   IndexProgress build() {
     // 啟動時先同步媒體清單，讓日期／類型篩選在索引前就能使用。
-    Future.microtask(() async {
-      try {
-        if (!_svc.isRunning) await _svc.sync();
-      } on Object {
-        // 尚未授權等情況：略過，之後開始索引時會再同步。
-      }
-      await refresh();
-    });
-    return const IndexProgress();
+    Future.microtask(resync);
+    return const IndexProgress(syncing: true);
+  }
+
+  bool _syncing = false;
+
+  /// 重新讀取裝置媒體庫（啟動、回到前景、使用者手動觸發時）。
+  Future<void> resync() async {
+    if (_svc.isRunning || _syncing) return;
+    _syncing = true;
+    state = state.withSync(syncing: true);
+    String? error;
+    try {
+      await _svc.sync();
+    } on Object catch (e) {
+      error = '$e';
+    } finally {
+      _syncing = false;
+    }
+    final version = ref.read(modelProvider).embedder?.version;
+    state = (await _svc.progress(version))
+        .withSync(syncing: false, error: error);
   }
 
   IndexingService get _svc => ref.read(indexingServiceProvider);
 
   Future<void> refresh() async {
-    if (_svc.isRunning) return;
+    if (_svc.isRunning || _syncing) return;
     final version = ref.read(modelProvider).embedder?.version;
-    state = await _svc.progress(version);
+    state = (await _svc.progress(version))
+        .withSync(syncing: false, error: state.syncError);
   }
 
   Future<void> start() async {

@@ -291,6 +291,12 @@ CREATE TABLE smart_album_items(
     _matrix = null;
   }
 
+  Future<int> videoCount() async =>
+      Sqflite.firstIntValue(
+        await db.rawQuery('SELECT COUNT(*) FROM assets WHERE is_video = 1'),
+      ) ??
+      0;
+
   Future<void> markFailed(String assetId) => db.update(
     'assets',
     {'index_state': IndexState.failed},

@@ -37,6 +37,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     final visible = s.visible;
     final result = s.result;
 
+    // 媒體庫讀取完成後，重新執行目前的文字搜尋，避免顯示讀取前的空結果。
+    ref.listen(indexProvider.select((p) => p.syncing), (was, now) {
+      final r = ref.read(searchProvider).result;
+      if (was == true && !now && r != null && !r.byImage) {
+        ctrl.search(r.query.raw);
+      }
+    });
+
     ref.listen(searchProvider.select((v) => v.error), (_, err) {
       if (err != null) {
         ScaffoldMessenger.of(context)
@@ -78,6 +86,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           ),
           if (!model.ready && !model.loading)
             const _Banner('尚未下載模型：目前只能用日期、地點、類型篩選。請到「設定」下載模型。'),
+          if (index.syncing)
+            const _Banner('正在讀取媒體庫…完成後會自動更新搜尋結果。')
+          else if (index.total == 0)
+            _Banner(
+              index.syncError == null
+                  ? '沒有讀取到任何相片或影片。請到「設定」確認權限，或按「重新讀取媒體庫」。'
+                  : '讀取媒體庫失敗：${index.syncError}',
+            ),
           if (model.ready && index.pending > 0)
             _Banner('尚有 ${index.pending} 個項目未索引，語意搜尋結果可能不完整。'),
           if (result != null) _QueryChips(result),
@@ -143,7 +159,18 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 : result == null
                 ? const _Hint()
                 : visible.isEmpty
-                ? const Center(child: Text('沒有符合的項目，可試著調低相關度'))
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        result.isSemantic
+                            ? '沒有符合的項目，可試著調低相關度'
+                            : '沒有符合條件的項目\n'
+                                  '（媒體庫共 ${index.photos} 張相片、${index.videos} 部影片）',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
                 : GridView.builder(
                     padding: const EdgeInsets.all(2),
                     gridDelegate:
