@@ -1,0 +1,64 @@
+# 在 GitHub 上匯出 Chinese-CLIP 模型包並驗證，完成後於 Artifacts 下載。
+# 下載後把 4 個檔案（image、text、vocab、manifest.json）上傳到「公開」repo 的同一個 Release。
+name: Export model
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/project-setup-implementation-p4mac3]
+    paths:
+      - 'tools/export_model.py'
+      - 'tools/verify_model.py'
+      - 'tools/requirements.txt'
+      - 'lib/services/bert_tokenizer.dart'
+      - 'test/tokenizer_vocab_test.dart'
+      - '.github/workflows/export-model.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r tools/requirements.txt
+
+      - name: Export
+        run: python tools/export_model.py --out dist/model --quantize
+
+      - name: Verify ONNX against PyTorch
+        run: python tools/verify_model.py --model-dir dist/model --cases dist/tokenizer_cases.json
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.9
+          cache: true
+
+      - name: Verify Dart tokenizer against the real vocab
+        env:
+          VOCAB_PATH: dist/model/vocab
+          CASES_PATH: dist/tokenizer_cases.json
+        run: |
+          flutter pub get
+          flutter test test/tokenizer_vocab_test.dart
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photo-prompt-model-${{ github.run_number }}
+          path: |
+            dist/model/image
+            dist/model/text
+            dist/model/vocab
+            dist/model/manifest.json
+          retention-days: 30

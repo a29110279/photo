@@ -67,8 +67,18 @@ python tools/poc/clip_poc.py --images <相片資料夾> --prompts tools/poc/prom
 
 ### 2. 匯出並發佈模型
 
+不需在本機安裝 Python：到 GitHub 的 **Actions › Export model › Run workflow**，
+完成後從該次執行的 Artifacts 下載 `photo-prompt-model-<編號>`。
+這個 workflow 會順便驗證 ONNX 與原始模型輸出一致，以及 Dart 版 tokenizer 與 Hugging Face 版相同。
+
+也可以在本機執行：
+
 ```bash
 python tools/export_model.py --out dist/model --quantize
+```
+
+```bash
+python tools/verify_model.py --model-dir dist/model
 ```
 
 把 `dist/model/` 內的 `image`、`text`、`vocab`、`manifest.json` 放到同一層的公開靜態空間（例如 GitHub Releases）。
