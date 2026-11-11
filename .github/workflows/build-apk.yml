@@ -34,6 +34,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # 同一個 commit 也觸發了 Export model 時，等它結束，避免打包到舊模型。
+          for i in $(seq 1 60); do
+            pending=$(gh run list -R "$GITHUB_REPOSITORY" --workflow export-model.yml \
+              --commit "$GITHUB_SHA" --json status \
+              -q '[.[] | select(.status != "completed")] | length')
+            [ "$pending" = "0" ] && break
+            echo "等待同一 commit 的 Export model 完成…（$i）"
+            sleep 30
+          done
           run_id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow export-model.yml \
             --status success --limit 1 --json databaseId -q '.[0].databaseId')
           if [ -z "$run_id" ]; then
