@@ -174,6 +174,10 @@ void main() {
     expect(m.totalSize, 30);
     expect(m.files['image']!.sha256, 'ab');
     expect(m.centerCrop, isFalse);
+    expect(
+      () => ModelManifest.fromJson({...json, 'imageSize': 153036046}),
+      throwsFormatException,
+    );
     (json['files'] as Map).remove('vocab');
     expect(() => ModelManifest.fromJson(json), throwsFormatException);
   });

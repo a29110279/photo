@@ -30,6 +30,8 @@ def main():
                     ChineseCLIPProcessor.from_pretrained(args.model), n)
 
     print("量化設定：", manifest.get("quantization"))
+    if not 64 <= manifest["imageSize"] <= 1024:
+        raise SystemExit(f"manifest 的 imageSize 不合理：{manifest['imageSize']}")
     worst = 1.0
     for kind in ("text", "image"):
         scores = ref.scores(args.model_dir / kind, kind)

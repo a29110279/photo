@@ -46,10 +46,14 @@ class ModelManifest {
     for (final k in fileKeys) {
       if (!files.containsKey(k)) throw FormatException('manifest 缺少檔案：$k');
     }
+    final imageSize = j['imageSize'] as int;
+    if (imageSize < 32 || imageSize > 2048) {
+      throw FormatException('manifest 的 imageSize 不合理：$imageSize');
+    }
     return ModelManifest(
       version: j['version'] as String,
       embeddingDim: j['embeddingDim'] as int,
-      imageSize: j['imageSize'] as int,
+      imageSize: imageSize,
       mean: nums('mean'),
       std: nums('std'),
       centerCrop: j['centerCrop'] as bool? ?? false,

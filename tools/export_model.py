@@ -92,6 +92,10 @@ def main():
     ip, tok = processor.image_processor, processor.tokenizer
     size = ip.size.get("height") or ip.size.get("shortest_edge")
 
+    # 基準必須在匯出前計算：TorchScript 匯出會改動模型的注意力實作等內部狀態，
+    # 之後再算會讓文字編碼器的基準偏移（fp32 自比只剩約 0.95）。
+    ref = Reference(model, processor, CONTEXT_LENGTH) if args.quantize else None
+
     raw = {"image": args.out / "image.fp32.onnx", "text": args.out / "text.fp32.onnx"}
     with torch.no_grad():
         torch.onnx.export(
@@ -104,23 +108,24 @@ def main():
 
     final = {"image": args.out / "image", "text": args.out / "text", "vocab": args.out / "vocab"}
     chosen = {}
-    ref = Reference(model, processor, CONTEXT_LENGTH) if args.quantize else None
     for key in ("image", "text"):
         chosen[key] = "fp32"
         if ref is not None:
             fp32_min = min(ref.scores(raw[key], key))
             print(f"{key} fp32: min cos {fp32_min:.4f}")
+            if fp32_min < 0.999:
+                raise SystemExit(f"{key} fp32 與原始模型不一致（{fp32_min:.4f}），匯出流程有問題")
             best = None
             for name, opts in QUANT_CANDIDATES:
                 out = args.out / f"{key}.{name}.onnx"
                 quantize_dynamic(str(raw[key]), str(out), **opts)
                 score = min(ref.scores(out, key))
-                size = out.stat().st_size
-                print(f"{key} {name}: min cos {score:.4f}, {size / 1e6:.0f} MB")
-                if score >= args.min_cos and (best is None or size < best[2]):
+                nbytes = out.stat().st_size
+                print(f"{key} {name}: min cos {score:.4f}, {nbytes / 1e6:.0f} MB")
+                if score >= args.min_cos and (best is None or nbytes < best[2]):
                     if best is not None:
                         best[1].unlink()
-                    best = (name, out, size, score)
+                    best = (name, out, nbytes, score)
                 else:
                     out.unlink()
             if best is not None:
