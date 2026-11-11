@@ -127,7 +127,7 @@ class _CleanupPageState extends ConsumerState<CleanupPage> {
                 FilledButton.icon(
                   onPressed: ready && !_busy ? _scan : null,
                   icon: const Icon(Icons.search),
-                  label: Text(ready ? '掃描' : '需先下載模型並完成索引'),
+                  label: Text(ready ? '掃描' : '需模型就緒並完成索引'),
                 ),
               ],
             ),

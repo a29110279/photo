@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
 
@@ -11,12 +12,7 @@ import '../services/model_service.dart';
 import '../services/search_service.dart';
 import '../services/smart_album_service.dart';
 
-/// 建置時可用 `--dart-define=MODEL_MANIFEST_URL=<url>` 指定預設模型清單位置。
-const kDefaultManifestUrl = String.fromEnvironment('MODEL_MANIFEST_URL');
-
 abstract final class SettingKeys {
-  static const modelPrompted = 'model_prompted';
-  static const manifestUrl = 'manifest_url';
   static const threshold = 'threshold';
   static const imageThreshold = 'image_threshold';
   static const ocrEnabled = 'ocr_enabled';
@@ -113,7 +109,7 @@ class ModelState {
   final bool loading;
   final EmbeddingService? embedder;
 
-  /// 下載進度 0~1；null 表示未在下載。
+  /// 首次啟動解出內建模型的進度 0~1；null 表示未在進行。
   final double? progress;
   final String? error;
 
@@ -127,13 +123,14 @@ class ModelController extends Notifier<ModelState> {
     return const ModelState(loading: true);
   }
 
-  Future<String> manifestUrl() async =>
-      await ref.read(storeProvider).getSetting(SettingKeys.manifestUrl) ??
-      kDefaultManifestUrl;
-
   Future<void> _loadInstalled() async {
     try {
-      final installed = await ref.read(modelServiceProvider).installed();
+      final installed = await ref
+          .read(modelServiceProvider)
+          .ensureBundled(
+            rootBundle,
+            onProgress: (p) => state = ModelState(loading: true, progress: p),
+          );
       state = ModelState(
         embedder: installed == null
             ? null
@@ -141,26 +138,6 @@ class ModelController extends Notifier<ModelState> {
       );
     } on Object catch (e) {
       state = ModelState(error: '模型載入失敗：$e');
-    }
-  }
-
-  Future<void> download(String url) async {
-    if (state.progress != null) return;
-    final old = state.embedder;
-    await ref.read(storeProvider).setSetting(SettingKeys.manifestUrl, url);
-    state = ModelState(embedder: old, progress: 0);
-    try {
-      final installed = await ref
-          .read(modelServiceProvider)
-          .install(
-            url,
-            onProgress: (p) => state = ModelState(embedder: old, progress: p),
-          );
-      final embedder = await EmbeddingService.load(installed);
-      old?.dispose();
-      state = ModelState(embedder: embedder);
-    } on Object catch (e) {
-      state = ModelState(embedder: old, error: '下載失敗：$e');
     }
   }
 }

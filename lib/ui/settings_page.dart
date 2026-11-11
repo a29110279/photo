@@ -13,22 +13,6 @@ class SettingsPage extends ConsumerStatefulWidget {
 }
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
-  final _url = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    ref.read(modelProvider.notifier).manifestUrl().then((u) {
-      if (mounted) _url.text = u;
-    });
-  }
-
-  @override
-  void dispose() {
-    _url.dispose();
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
     final model = ref.watch(modelProvider);
@@ -50,36 +34,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         children: [
           Text('語意模型', style: titleStyle),
           const SizedBox(height: 8),
-          Text(
-            model.loading
-                ? '載入中…'
-                : model.ready
-                ? '已安裝：${model.embedder!.version}'
-                : '尚未安裝',
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _url,
-            keyboardType: TextInputType.url,
-            decoration: const InputDecoration(
-              labelText: '模型清單網址（manifest.json）',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 8),
           if (model.progress != null) ...[
-            LinearProgressIndicator(value: model.progress),
+            Text('首次啟動：正在準備模型 ${(model.progress! * 100).toStringAsFixed(0)}%'),
             const SizedBox(height: 4),
-            Text('下載中 ${(model.progress! * 100).toStringAsFixed(0)}%'),
+            LinearProgressIndicator(value: model.progress),
           ] else
-            FilledButton.tonal(
-              onPressed: () {
-                final url = _url.text.trim();
-                if (url.isEmpty) return;
-                ref.read(modelProvider.notifier).download(url);
-              },
-              child: Text(model.ready ? '檢查並更新模型' : '下載模型'),
+            Text(
+              model.loading
+                  ? '載入中…'
+                  : model.ready
+                  ? '已就緒：${model.embedder!.version}'
+                  : '此安裝檔未內建模型，只能使用日期、地點、類型篩選',
             ),
           if (model.error != null)
             Padding(
@@ -91,8 +56,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
           const SizedBox(height: 4),
           Text(
-            '下載模型是本 App 唯一的網路行為；相片與搜尋內容不會離開裝置。'
-            '下載支援斷點續傳，完成後會以 SHA-256 校驗。',
+            '模型內建於 App，不需連網；相片與搜尋內容不會離開裝置。',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const Divider(height: 32),

@@ -62,3 +62,7 @@ __pycache__/
 .claude/settings.json
 .claude/settings.local.json
 .claude/settings.json.graphify-bak
+
+# 內建模型檔（由 CI 放入，見 .github/workflows/build-apk.yml）
+/assets/model/*
+!/assets/model/.gitkeep

@@ -84,8 +84,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               ),
             ),
           ),
-          if (!model.ready && !model.loading)
-            const _Banner('尚未下載模型：目前只能用日期、地點、類型篩選。請到「設定」下載模型。'),
+          if (model.progress != null)
+            const _Banner('首次啟動：正在準備語意模型，約需數十秒…')
+          else if (!model.ready && !model.loading)
+            const _Banner('此安裝檔未內建語意模型：目前只能用日期、地點、類型篩選。'),
           if (index.syncing)
             const _Banner('正在讀取媒體庫…完成後會自動更新搜尋結果。')
           else if (index.total == 0)
