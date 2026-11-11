@@ -79,7 +79,15 @@ def main():
     for key in ("image", "text"):
         if args.quantize:
             from onnxruntime.quantization import QuantType, quantize_dynamic
-            quantize_dynamic(str(raw[key]), str(final[key]), weight_type=QuantType.QUInt8)
+            # 只量化 MatMul（不動詞嵌入表 Gather），並逐通道量化：
+            # 預設的全模型 QUInt8 會讓文字編碼器偏離原模型過多（cosine 約 0.87~0.96）。
+            quantize_dynamic(
+                str(raw[key]),
+                str(final[key]),
+                weight_type=QuantType.QInt8,
+                per_channel=True,
+                op_types_to_quantize=["MatMul"],
+            )
             raw[key].unlink()
         else:
             raw[key].replace(final[key])
