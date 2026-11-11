@@ -43,6 +43,8 @@ dependencies:
   onnxruntime: ^1.4.1
   video_player: ^2.14.1
   workmanager: ^0.10.10
+  native_media:
+    path: packages/native_media
 
 dev_dependencies:
   flutter_test:

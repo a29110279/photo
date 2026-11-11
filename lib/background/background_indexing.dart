@@ -70,11 +70,11 @@ Future<void> runBackgroundIndexing() async {
     embedder = installed == null
         ? null
         : await EmbeddingService.load(installed);
-    // App 自寫的原生通道（影片抽幀、OCR）只註冊在主畫面的引擎，背景引擎沒有；
-    // 因此背景只處理相片的語意索引與 GPS，影片與 OCR 留到 App 開啟時處理。
+    // 影片抽幀與 OCR 的原生通道由本地外掛 native_media 提供，背景引擎也會註冊。
+    final withOcr = await store.getSetting(SettingKeys.ocrEnabled) == '1';
     await IndexingService(store, const MediaRepository()).run(
       embedder,
-      photosOnly: true,
+      withOcr: withOcr,
       timeBudget: _budget,
       shouldStop: () => _foregroundActive(store),
     );

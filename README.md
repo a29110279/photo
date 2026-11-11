@@ -39,7 +39,7 @@ Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evalua
 - O5 智慧相簿無法完全自動加入：Android 搬移每次都需要系統授權框，因此改為索引後計算「待加入」數量，由使用者一鍵套用。
 - O9 OCR 不使用 `google_mlkit_text_recognition` 外掛（其 iOS 版只支援拉丁文字），改自寫原生通道：Android 用 ML Kit 中文辨識（bundled 模型，不需連網），iOS 用 Apple Vision（繁中、簡中、英文）。
 - O6 刪除改為移到系統垃圾桶（Android 11+）或「最近刪除」（iOS），由系統相簿復原，不列入 App 的操作紀錄。
-- 索引全自動：首次開啟即開始，之後每次開啟或回到前景只處理新增或修改的項目；App 在背景時由 WorkManager（Android）／BGProcessingTask（iOS）接手。背景引擎沒有 App 自寫的原生通道，因此**背景只處理相片**，影片抽幀與 OCR 留到 App 開啟時處理。
+- 索引全自動：首次開啟即開始，之後每次開啟或回到前景只處理新增或修改的項目；App 在背景時由 WorkManager（Android）／BGProcessingTask（iOS）接手。OCR 與影片抽幀的原生程式做成本地外掛 `packages/native_media`，背景引擎也能使用。
 - 索引加速：原生影像解碼、讀圖與推論並行、進度回報節流、GPS 於語意索引後才讀取。
 - 模型改為**包進 APK**（評估文件原為首次啟動下載）：不需公開空間與網路，代價是 APK 約數百 MB，每次更新都要重新下載整包。
 - 模型預設為 Chinese-CLIP（tokenizer 為 BERT WordPiece，可在 Dart 內實作）。若 PoC 結果改選其他模型，需替換 tokenizer。

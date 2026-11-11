@@ -1,0 +1,21 @@
+name: native_media
+description: "提示詞相簿自用的原生功能：OCR（ML Kit / Apple Vision）與影片抽幀。"
+version: 0.0.1
+publish_to: 'none'
+
+environment:
+  sdk: ^3.13.7
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.personal.native_media
+        pluginClass: NativeMediaPlugin
+      ios:
+        pluginClass: NativeMediaPlugin
