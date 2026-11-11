@@ -69,7 +69,7 @@ class LocalStore {
   LocalStore(this.db);
   final Database db;
 
-  static const _version = 2;
+  static const _version = 3;
 
   static Future<LocalStore> open(
     String path, {
@@ -88,6 +88,15 @@ class LocalStore {
             );
             await _createV2Tables(db);
           }
+          if (oldVersion < 3) {
+            // 已有座標的項目視為已讀取 GPS。
+            await db.execute(
+              'ALTER TABLE assets ADD COLUMN gps_state INTEGER NOT NULL DEFAULT 0',
+            );
+            await db.execute(
+              'UPDATE assets SET gps_state = 1 WHERE lat IS NOT NULL',
+            );
+          }
         },
         onCreate: (db, _) async {
           await db.execute('''
@@ -101,7 +110,8 @@ CREATE TABLE assets(
   lng REAL,
   index_state INTEGER NOT NULL DEFAULT 0,
   model_version TEXT,
-  ocr_state INTEGER NOT NULL DEFAULT 0
+  ocr_state INTEGER NOT NULL DEFAULT 0,
+  gps_state INTEGER NOT NULL DEFAULT 0
 )''');
           await db.execute(
             'CREATE INDEX idx_assets_state ON assets(index_state, create_ts DESC)',
@@ -193,6 +203,8 @@ CREATE TABLE smart_album_items(
           'duration': a.duration,
           'lat': a.lat,
           'lng': a.lng,
+          // iOS 的座標在列舉時就拿得到；Android 需另外讀 EXIF。
+          'gps_state': a.lat == null ? IndexState.pending : IndexState.done,
         });
       } else if (prev != a.modifiedTs) {
         changed++;
@@ -204,6 +216,9 @@ CREATE TABLE smart_album_items(
             'duration': a.duration,
             'index_state': IndexState.pending,
             'ocr_state': IndexState.pending,
+            'lat': a.lat,
+            'lng': a.lng,
+            'gps_state': a.lat == null ? IndexState.pending : IndexState.done,
           },
           where: 'id = ?',
           whereArgs: [a.id],
@@ -227,10 +242,13 @@ CREATE TABLE smart_album_items(
   Future<List<AssetRecord>> pendingAssets(
     String modelVersion, {
     int limit = 50,
+    bool photosOnly = false,
   }) async {
     final rows = await db.query(
       'assets',
-      where: 'index_state = ? OR (index_state = ? AND model_version IS NOT ?)',
+      where:
+          '(index_state = ? OR (index_state = ? AND model_version IS NOT ?))'
+          '${photosOnly ? ' AND is_video = 0' : ''}',
       whereArgs: [IndexState.pending, IndexState.done, modelVersion],
       orderBy: 'create_ts DESC',
       limit: limit,
@@ -332,6 +350,29 @@ CREATE TABLE smart_album_items(
     await batch.commit(noResult: true);
     _matrix = null;
   }
+
+  // ---- GPS（延後讀取） ----
+
+  /// 尚未讀取 GPS 的項目（最近的優先）。
+  Future<List<AssetRecord>> pendingGps({int limit = 100}) async {
+    final rows = await db.query(
+      'assets',
+      where: 'gps_state = ?',
+      whereArgs: [IndexState.pending],
+      orderBy: 'create_ts DESC',
+      limit: limit,
+    );
+    return rows.map(_toRecord).toList();
+  }
+
+  /// 記錄 GPS 讀取結果；沒有座標也標記為已讀取，不再重試。
+  Future<void> saveLocation(String assetId, double? lat, double? lng) =>
+      db.update(
+        'assets',
+        {'gps_state': IndexState.done, 'lat': lat, 'lng': lng},
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
 
   // ---- OCR（O9） ----
 

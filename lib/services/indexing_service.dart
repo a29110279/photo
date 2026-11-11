@@ -56,14 +56,27 @@ class IndexProgress {
   int get ocrPending => ocrTotal - ocrDone;
 }
 
-/// 索引管線（C5/C7/O9）：增量同步 → 計算 embedding →（選用）OCR → 寫入資料庫。
-/// 每個 asset 完成即落盤，因此中斷後可從斷點續做。
+/// 索引停止的條件（非同步，例如檢查前景 App 是否在執行）。
+typedef StopCheck = Future<bool> Function();
+
+/// 預先讀取好的媒體資料：推論目前項目時，下一個項目的縮圖已在讀取中。
+class _Prepared {
+  const _Prepared(this.record, this.frames);
+  final AssetRecord record;
+  final List<Uint8List> frames;
+}
+
+/// 索引管線（C5/C7/O9）：增量同步 → 計算 embedding → 讀取 GPS →（選用）OCR。
+/// 每個項目完成即落盤，因此中斷後可從斷點續做；前景與背景索引共用此流程。
 class IndexingService {
   IndexingService(this.store, this.media, {this.ocr = const OcrService()});
 
   final LocalStore store;
   final MediaRepository media;
   final OcrService ocr;
+
+  /// 進度回報的最短間隔：每張都查詢資料庫計數會拖慢索引。
+  static const progressInterval = Duration(milliseconds: 500);
 
   bool _cancel = false;
   bool _running = false;
@@ -91,76 +104,149 @@ class IndexingService {
     );
   }
 
-  /// 執行索引直到完成或被取消。[embedder] 為 null 時略過語意索引；
-  /// [withOcr] 為 true 時於語意索引後執行 OCR。
-  Future<void> run(
+  /// 執行索引直到完成、被取消、[shouldStop] 回傳 true 或超過 [timeBudget]。
+  /// [embedder] 為 null 時略過語意索引；[withOcr] 為 true 時最後執行 OCR。
+  /// [photosOnly] 只處理相片（背景引擎沒有影片抽幀的原生通道）。
+  /// 回傳是否全部完成（未被中斷）。
+  Future<bool> run(
     EmbeddingService? embedder, {
     bool withOcr = false,
+    bool doSync = true,
+    bool photosOnly = false,
     void Function(IndexProgress)? onProgress,
+    StopCheck? shouldStop,
+    Duration? timeBudget,
   }) async {
-    if (_running) return;
+    if (_running) return false;
     _running = true;
     _cancel = false;
+    final deadline = timeBudget == null ? null : DateTime.now().add(timeBudget);
     final version = embedder?.version;
-    Future<void> report() async =>
-        onProgress?.call(await progress(version, running: true));
+
+    Future<bool> stopped() async =>
+        _cancel ||
+        (deadline != null && DateTime.now().isAfter(deadline)) ||
+        (shouldStop != null && await shouldStop());
+
+    // 只在開始時查一次總數，之後以本地計數更新，並限制回報頻率。
+    var base = const IndexProgress();
+    var done = 0, failed = 0, ocrDone = 0;
+    var lastReport = DateTime.fromMillisecondsSinceEpoch(0);
+    void report({bool force = false}) {
+      if (onProgress == null) return;
+      final now = DateTime.now();
+      if (!force && now.difference(lastReport) < progressInterval) return;
+      lastReport = now;
+      onProgress(
+        IndexProgress(
+          total: base.total,
+          videos: base.videos,
+          done: base.done + done,
+          failed: base.failed + failed,
+          ocrTotal: base.ocrTotal,
+          ocrDone: base.ocrDone + ocrDone,
+          running: true,
+        ),
+      );
+    }
+
+    var completed = false;
     try {
-      await sync();
-      await report();
+      if (doSync) await sync();
+      base = await progress(version, running: true);
+      report(force: true);
+
       if (embedder != null) {
-        while (!_cancel) {
-          final batch = await store.pendingAssets(embedder.version);
+        while (!await stopped()) {
+          final batch = await store.pendingAssets(
+            embedder.version,
+            photosOnly: photosOnly,
+          );
           if (batch.isEmpty) break;
-          for (final rec in batch) {
-            if (_cancel) break;
-            await _indexOne(rec, embedder);
-            await report();
+          Future<_Prepared> prepare(AssetRecord r) async {
+            try {
+              final entity = await AssetEntity.fromId(r.id);
+              return _Prepared(
+                r,
+                entity == null ? const [] : await media.framesFor(entity),
+              );
+            } on Object {
+              return _Prepared(r, const []);
+            }
+          }
+
+          var next = prepare(batch.first);
+          for (var i = 0; i < batch.length; i++) {
+            final current = await next;
+            // 推論目前項目時，同時讀取下一個項目的縮圖。
+            if (i + 1 < batch.length) next = prepare(batch[i + 1]);
+            if (await _embed(current, embedder)) {
+              done++;
+            } else {
+              failed++;
+            }
+            report();
+            if (await stopped()) break;
           }
         }
       }
+
+      // GPS 不影響語意搜尋，放在語意索引之後讀取。
+      while (!await stopped()) {
+        final batch = await store.pendingGps();
+        if (batch.isEmpty) break;
+        for (final rec in batch) {
+          await _locate(rec);
+          if (await stopped()) break;
+        }
+      }
+
       if (withOcr && OcrService.supported) {
-        while (!_cancel) {
+        while (!await stopped()) {
           final batch = await store.pendingOcr();
           if (batch.isEmpty) break;
           for (final rec in batch) {
-            if (_cancel) break;
             await _ocrOne(rec);
-            await report();
+            ocrDone++;
+            report();
+            if (await stopped()) break;
           }
         }
       }
+      completed = !await stopped();
     } finally {
       _running = false;
       onProgress?.call(await progress(version));
     }
+    return completed;
   }
 
-  Future<void> _indexOne(AssetRecord rec, EmbeddingService embedder) async {
+  Future<bool> _embed(_Prepared p, EmbeddingService embedder) async {
     try {
-      final entity = await AssetEntity.fromId(rec.id);
-      if (entity == null) {
-        await store.markFailed(rec.id);
-        return;
-      }
       final vectors = <Float32List>[];
-      for (final frame in await media.framesFor(entity)) {
+      for (final frame in p.frames) {
         final v = await embedder.embedImage(frame);
         if (v != null) vectors.add(v);
       }
       if (vectors.isEmpty) {
-        await store.markFailed(rec.id);
-        return;
+        await store.markFailed(p.record.id);
+        return false;
       }
-      final loc = rec.lat == null ? await media.location(entity) : null;
-      await store.saveEmbeddings(
-        rec.id,
-        vectors,
-        embedder.version,
-        lat: loc?.$1,
-        lng: loc?.$2,
-      );
+      await store.saveEmbeddings(p.record.id, vectors, embedder.version);
+      return true;
     } on Object {
-      await store.markFailed(rec.id);
+      await store.markFailed(p.record.id);
+      return false;
+    }
+  }
+
+  Future<void> _locate(AssetRecord rec) async {
+    try {
+      final entity = await AssetEntity.fromId(rec.id);
+      final loc = entity == null ? null : await media.location(entity);
+      await store.saveLocation(rec.id, loc?.$1, loc?.$2);
+    } on Object {
+      await store.saveLocation(rec.id, null, null);
     }
   }
 

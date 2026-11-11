@@ -10,7 +10,7 @@ import 'video_frames.dart';
 class MediaRepository {
   const MediaRepository();
 
-  static const _request = PermissionRequestOption(
+  static const request = PermissionRequestOption(
     androidPermission: AndroidPermission(
       type: RequestType.common,
       mediaLocation: true,
@@ -18,10 +18,10 @@ class MediaRepository {
   );
 
   Future<PermissionState> permissionState() =>
-      PhotoManager.getPermissionState(requestOption: _request);
+      PhotoManager.getPermissionState(requestOption: request);
 
   Future<PermissionState> requestPermission() =>
-      PhotoManager.requestPermissionExtend(requestOption: _request);
+      PhotoManager.requestPermissionExtend(requestOption: request);
 
   /// 取得全部相片與影片（新到舊），以分頁讀取避免一次占用過多記憶體。
   Future<List<AssetEntity>> allAssets() async {
@@ -81,7 +81,8 @@ class MediaRepository {
     int everySeconds = 5,
     int maxFrames = 8,
   }) async {
-    const size = ThumbnailSize.square(448);
+    // 模型輸入為 224×224，取稍大的縮圖即可，讀取與解碼都較快。
+    const size = ThumbnailSize.square(320);
     if (a.type != AssetType.video) {
       final t = await a.thumbnailDataWithSize(size, quality: 90);
       return [?t];
@@ -94,8 +95,10 @@ class MediaRepository {
       final step = total <= 0 ? 0 : (total * 1000) ~/ count;
       for (var i = 0; i < count; i++) {
         try {
-          final data = await const VideoFrames()
-              .frameAt(file.path, i * step + (step ~/ 2));
+          final data = await const VideoFrames().frameAt(
+            file.path,
+            i * step + (step ~/ 2),
+          );
           if (data != null) frames.add(data);
         } on Object {
           // 個別幀失敗不影響其他幀。

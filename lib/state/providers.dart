@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../data/local_store.dart';
+import '../data/setting_keys.dart';
+
+export '../data/setting_keys.dart';
 import '../data/media_repository.dart';
 import '../services/album_service.dart';
 import '../services/duplicate_service.dart';
@@ -11,12 +16,6 @@ import '../services/indexing_service.dart';
 import '../services/model_service.dart';
 import '../services/search_service.dart';
 import '../services/smart_album_service.dart';
-
-abstract final class SettingKeys {
-  static const threshold = 'threshold';
-  static const imageThreshold = 'image_threshold';
-  static const ocrEnabled = 'ocr_enabled';
-}
 
 /// 預設相關度門檻（cosine）。實際合適的值依模型而異，需以 PoC 校準。
 const kDefaultThreshold = 0.20;
@@ -117,6 +116,11 @@ class ModelState {
 }
 
 class ModelController extends Notifier<ModelState> {
+  final _loaded = Completer<void>();
+
+  /// 內建模型載入（成功或失敗）完成時結束。
+  Future<void> get loaded => _loaded.future;
+
   @override
   ModelState build() {
     Future.microtask(_loadInstalled);
@@ -138,6 +142,8 @@ class ModelController extends Notifier<ModelState> {
       );
     } on Object catch (e) {
       state = ModelState(error: '模型載入失敗：$e');
+    } finally {
+      if (!_loaded.isCompleted) _loaded.complete();
     }
   }
 }
@@ -148,17 +154,19 @@ final modelProvider = NotifierProvider<ModelController, ModelState>(
 
 // ---- 索引（C5） ----
 
+/// 前景索引：首次開啟即開始，之後每次開啟或回到前景時只處理新增或修改的項目。
 class IndexController extends Notifier<IndexProgress> {
   @override
   IndexProgress build() {
-    // 啟動時先同步媒體清單，讓日期／類型篩選在索引前就能使用。
-    Future.microtask(resync);
+    Future.microtask(autoIndex);
     return const IndexProgress(syncing: true);
   }
 
   bool _syncing = false;
 
-  /// 重新讀取裝置媒體庫（啟動、回到前景、使用者手動觸發時）。
+  IndexingService get _svc => ref.read(indexingServiceProvider);
+
+  /// 重新讀取裝置媒體庫，讓日期／類型篩選立即可用。
   Future<void> resync() async {
     if (_svc.isRunning || _syncing) return;
     _syncing = true;
@@ -176,8 +184,6 @@ class IndexController extends Notifier<IndexProgress> {
         .withSync(syncing: false, error: error);
   }
 
-  IndexingService get _svc => ref.read(indexingServiceProvider);
-
   Future<void> refresh() async {
     if (_svc.isRunning || _syncing) return;
     final version = ref.read(modelProvider).embedder?.version;
@@ -185,25 +191,30 @@ class IndexController extends Notifier<IndexProgress> {
         .withSync(syncing: false, error: state.syncError);
   }
 
-  Future<void> start() async {
+  /// 讀取媒體庫後自動索引尚未處理的項目（App 啟動、回到前景、開啟 OCR 時）。
+  Future<void> autoIndex() async {
+    if (_svc.isRunning) return;
+    await resync();
+    await ref.read(modelProvider.notifier).loaded;
     final embedder = ref.read(modelProvider).embedder;
-    final withOcr = ref.read(ocrEnabledProvider);
-    if ((embedder == null && !withOcr) || _svc.isRunning) return;
+    if (_svc.isRunning) return;
     try {
-      await _svc.run(embedder, withOcr: withOcr, onProgress: (p) => state = p);
+      await _svc.run(
+        embedder,
+        withOcr: ref.read(ocrEnabledProvider),
+        doSync: false,
+        onProgress: (p) => state = p,
+      );
+    } on Object {
+      // 個別項目的錯誤已在服務內處理；其餘錯誤留待下次自動重試。
     } finally {
       // 新索引的項目可能符合智慧相簿規則。
       ref.invalidate(smartAlbumPendingProvider);
     }
   }
 
-  void stop() => _svc.cancel();
-
-  Future<void> reset({bool onlyFailed = false}) async {
-    if (_svc.isRunning) return;
-    await ref.read(storeProvider).resetIndex(onlyFailed: onlyFailed);
-    await refresh();
-  }
+  /// App 進入背景時停止前景索引（之後由背景任務接手）。
+  void pause() => _svc.cancel();
 }
 
 final indexProvider = NotifierProvider<IndexController, IndexProgress>(
