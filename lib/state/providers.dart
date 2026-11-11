@@ -461,3 +461,13 @@ final smartAlbumPendingProvider = FutureProvider.autoDispose
             dim: embedder?.dim ?? 0,
           );
     });
+
+// ---- 整理（O10） ----
+
+final screenshotsProvider = FutureProvider.autoDispose<List<AssetRecord>>(
+  (ref) => ref.watch(storeProvider).screenshots(),
+);
+
+final blurriestProvider = FutureProvider.autoDispose<List<AssetRecord>>(
+  (ref) => ref.watch(storeProvider).blurriest(),
+);

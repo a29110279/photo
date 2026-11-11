@@ -1,18 +1,85 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 
+import '../data/local_store.dart';
 import '../state/providers.dart';
 import 'asset_widgets.dart';
 
-/// 整理：重複／相似照片（O6）。
-class CleanupPage extends ConsumerStatefulWidget {
+/// 整理：相似照片（O6）、截圖與螢幕錄影、模糊照片（O10）。
+class CleanupPage extends StatelessWidget {
   const CleanupPage({super.key});
 
   @override
-  ConsumerState<CleanupPage> createState() => _CleanupPageState();
+  Widget build(BuildContext context) => DefaultTabController(
+    length: 3,
+    child: Scaffold(
+      appBar: AppBar(
+        title: const Text('整理'),
+        bottom: const TabBar(
+          tabs: [
+            Tab(text: '相似照片'),
+            Tab(text: '截圖與錄影'),
+            Tab(text: '模糊照片'),
+          ],
+        ),
+      ),
+      body: const TabBarView(
+        children: [_SimilarTab(), _ScreenshotTab(), _BlurTab()],
+      ),
+    ),
+  );
 }
 
-class _CleanupPageState extends ConsumerState<CleanupPage> {
+/// 確認後移到系統垃圾桶，並自資料庫移除；回傳實際刪除的 id（取消為 null）。
+Future<Set<String>?> confirmAndTrash(
+  BuildContext context,
+  WidgetRef ref,
+  List<String> ids,
+) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text('刪除 ${ids.length} 個項目？'),
+      content: const Text(
+        '會移到系統的垃圾桶（Android）或「最近刪除」（iOS），'
+        '在系統相簿內仍可復原。系統會再跳出一次確認。',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('刪除'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return null;
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    final deleted = await ref.read(mediaRepositoryProvider).trash(ids);
+    await ref.read(storeProvider).removeAssets(deleted);
+    messenger.showSnackBar(
+      SnackBar(content: Text('已刪除 ${deleted.length} 個項目')),
+    );
+    return deleted.toSet();
+  } on Object catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('$e')));
+    return null;
+  }
+}
+
+class _SimilarTab extends ConsumerStatefulWidget {
+  const _SimilarTab();
+
+  @override
+  ConsumerState<_SimilarTab> createState() => _SimilarTabState();
+}
+
+class _SimilarTabState extends ConsumerState<_SimilarTab> {
   double _threshold = 0.95;
   bool _nearbyOnly = true;
   bool _busy = false;
@@ -48,50 +115,19 @@ class _CleanupPageState extends ConsumerState<CleanupPage> {
   }
 
   Future<void> _trash() async {
-    final ids = _selected.toList();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('刪除 ${ids.length} 個項目？'),
-        content: const Text(
-          '會移到系統的垃圾桶（Android）或「最近刪除」（iOS），'
-          '在系統相簿內仍可復原。系統會再跳出一次確認。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('刪除'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final deleted = await ref.read(mediaRepositoryProvider).trash(ids);
-      await ref.read(storeProvider).removeAssets(deleted);
-      final gone = deleted.toSet();
-      setState(() {
-        _selected.removeAll(gone);
-        _groups = [
-          for (final g in _groups ?? const <List<String>>[])
-            if (g.where((id) => !gone.contains(id)).length > 1)
-              [
-                for (final id in g)
-                  if (!gone.contains(id)) id,
-              ],
-        ];
-      });
-      messenger.showSnackBar(
-        SnackBar(content: Text('已刪除 ${deleted.length} 個項目')),
-      );
-    } on Object catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('$e')));
-    }
+    final gone = await confirmAndTrash(context, ref, _selected.toList());
+    if (gone == null || !mounted) return;
+    setState(() {
+      _selected.removeAll(gone);
+      _groups = [
+        for (final g in _groups ?? const <List<String>>[])
+          if (g.where((id) => !gone.contains(id)).length > 1)
+            [
+              for (final id in g)
+                if (!gone.contains(id)) id,
+            ],
+      ];
+    });
   }
 
   @override
@@ -99,7 +135,6 @@ class _CleanupPageState extends ConsumerState<CleanupPage> {
     final ready = ref.watch(modelProvider).ready;
     final groups = _groups;
     return Scaffold(
-      appBar: AppBar(title: const Text('整理：相似照片')),
       body: Column(
         children: [
           Padding(
@@ -200,6 +235,143 @@ class _GroupRow extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 截圖與螢幕錄影（O10）。
+class _ScreenshotTab extends ConsumerWidget {
+  const _ScreenshotTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => _PickAndTrash(
+    provider: screenshotsProvider,
+    emptyText: '沒有找到截圖或螢幕錄影',
+    hint: '依時間新到舊排列。Android 依所在資料夾判斷，iOS 依系統標記（iOS 的螢幕錄影無法辨識）。',
+  );
+}
+
+/// 模糊照片（O10）：依清晰度由低到高排列，由使用者挑選。
+class _BlurTab extends ConsumerWidget {
+  const _BlurTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => _PickAndTrash(
+    provider: blurriestProvider,
+    emptyText: '尚無清晰度資料，索引完成後會出現在這裡',
+    hint: '由最模糊開始排列，數字為清晰度（越小越模糊）。夜景、霧景等低對比照片也可能排在前面，請確認後再刪除。',
+    badge: (a) => a.sharpness?.toStringAsFixed(0),
+  );
+}
+
+/// 可多選並刪除的縮圖清單。
+class _PickAndTrash extends ConsumerStatefulWidget {
+  const _PickAndTrash({
+    required this.provider,
+    required this.emptyText,
+    required this.hint,
+    this.badge,
+  });
+
+  final ProviderListenable<AsyncValue<List<AssetRecord>>> provider;
+  final String emptyText;
+  final String hint;
+  final String? Function(AssetRecord)? badge;
+
+  @override
+  ConsumerState<_PickAndTrash> createState() => _PickAndTrashState();
+}
+
+class _PickAndTrashState extends ConsumerState<_PickAndTrash> {
+  final _selected = <String>{};
+  final _gone = <String>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final async = ref.watch(widget.provider);
+    return Scaffold(
+      body: async.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('$e')),
+        data: (all) {
+          final items = [
+            for (final a in all)
+              if (!_gone.contains(a.id)) a,
+          ];
+          if (items.isEmpty) return Center(child: Text(widget.emptyText));
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Text(
+                  widget.hint,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              Row(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Text('${items.length} 個・已選 ${_selected.length}'),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () => setState(
+                      () => _selected.addAll(items.map((a) => a.id)),
+                    ),
+                    child: const Text('全選'),
+                  ),
+                  TextButton(
+                    onPressed: () => setState(_selected.clear),
+                    child: const Text('清除'),
+                  ),
+                ],
+              ),
+              Expanded(
+                child: GridView.builder(
+                  padding: const EdgeInsets.all(2),
+                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 130,
+                    mainAxisSpacing: 2,
+                    crossAxisSpacing: 2,
+                  ),
+                  itemCount: items.length,
+                  itemBuilder: (_, i) {
+                    final a = items[i];
+                    return AssetTile(
+                      key: ValueKey(a.id),
+                      assetId: a.id,
+                      selected: _selected.contains(a.id),
+                      badge: widget.badge?.call(a),
+                      onTap: () => setState(() {
+                        if (!_selected.remove(a.id)) _selected.add(a.id);
+                      }),
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+      floatingActionButton: _selected.isEmpty
+          ? null
+          : FloatingActionButton.extended(
+              icon: const Icon(Icons.delete_outline),
+              label: Text('刪除 ${_selected.length} 個'),
+              onPressed: () async {
+                final gone = await confirmAndTrash(
+                  context,
+                  ref,
+                  _selected.toList(),
+                );
+                if (gone == null || !mounted) return;
+                setState(() {
+                  _gone.addAll(gone);
+                  _selected.removeAll(gone);
+                });
+              },
+            ),
     );
   }
 }
