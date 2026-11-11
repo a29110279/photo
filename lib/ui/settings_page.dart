@@ -47,7 +47,12 @@ class SettingsPage extends ConsumerWidget {
             '${index.failed > 0 ? '（${index.failed} 個無法處理）' : ''}',
           ),
           const SizedBox(height: 4),
-          Text(status, style: small),
+          Text(
+            index.msPerItem == null
+                ? status
+                : '$status（平均每個項目 ${index.msPerItem} 毫秒）',
+            style: small,
+          ),
           if (model.error != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),

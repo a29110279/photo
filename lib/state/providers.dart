@@ -167,6 +167,7 @@ class IndexController extends Notifier<IndexProgress> {
   IndexingService get _svc => ref.read(indexingServiceProvider);
 
   /// 重新讀取裝置媒體庫，讓日期／類型篩選立即可用。
+  /// 無論成功或失敗都會結束「讀取中」狀態，避免畫面一直停在讀取媒體庫。
   Future<void> resync() async {
     if (_svc.isRunning || _syncing) return;
     _syncing = true;
@@ -176,12 +177,16 @@ class IndexController extends Notifier<IndexProgress> {
       await _svc.sync();
     } on Object catch (e) {
       error = '$e';
+    }
+    try {
+      final version = ref.read(modelProvider).embedder?.version;
+      state = (await _svc.progress(version))
+          .withSync(syncing: false, error: error);
+    } on Object catch (e) {
+      state = state.withSync(syncing: false, error: error ?? '$e');
     } finally {
       _syncing = false;
     }
-    final version = ref.read(modelProvider).embedder?.version;
-    state = (await _svc.progress(version))
-        .withSync(syncing: false, error: error);
   }
 
   Future<void> refresh() async {

@@ -24,16 +24,43 @@ class MediaRepository {
       PhotoManager.requestPermissionExtend(requestOption: request);
 
   /// 取得全部相片與影片（新到舊），以分頁讀取避免一次占用過多記憶體。
-  Future<List<AssetEntity>> allAssets() async {
+  Future<AssetPathEntity?> _allPath({PMFilter? filter}) async {
     final paths = await PhotoManager.getAssetPathList(
       type: RequestType.common,
       onlyAll: true,
+      filterOption: filter,
     );
-    if (paths.isEmpty) return const [];
-    final all = paths.first;
+    return paths.isEmpty ? null : paths.first;
+  }
+
+  /// 媒體庫的快速指紋：總數 + 最新修改與最新建立的項目。
+  /// 與上次相同時可略過完整列舉（新增、刪除、修改都會改變指紋）。
+  Future<String> signature() async {
+    final byCreate = await _allPath();
+    if (byCreate == null) return 'empty';
+    final count = await byCreate.assetCountAsync;
+    if (count == 0) return 'empty';
+    final newest = await byCreate.getAssetListRange(start: 0, end: 1);
+    final byUpdate = await _allPath(
+      filter: FilterOptionGroup(
+        orders: const [OrderOption(type: OrderOptionType.updateDate)],
+      ),
+    );
+    final updated = byUpdate == null
+        ? const <AssetEntity>[]
+        : await byUpdate.getAssetListRange(start: 0, end: 1);
+    String key(List<AssetEntity> l) =>
+        l.isEmpty ? '-' : '${l.first.id}@${l.first.modifiedDateSecond}';
+    return '$count|${key(newest)}|${key(updated)}';
+  }
+
+  Future<List<AssetEntity>> allAssets() async {
+    final all = await _allPath();
+    if (all == null) return const [];
     final count = await all.assetCountAsync;
     final out = <AssetEntity>[];
-    const pageSize = 500;
+    // 每頁都要經過原生通道，頁數越少越快。
+    const pageSize = 2000;
     for (var start = 0; start < count; start += pageSize) {
       out.addAll(
         await all.getAssetListRange(
@@ -49,9 +76,25 @@ class MediaRepository {
     for (final a in await allAssets()) toRecord(a),
   ];
 
+  static final _screenshotPath = RegExp(
+    r'screen ?shots?|screen ?record|screencap|截圖|截屏|螢幕錄影|屏幕录制',
+    caseSensitive: false,
+  );
+
+  /// iOS PHAssetMediaSubtype.photoScreenshot。
+  static const _iosScreenshotSubtype = 1 << 2;
+
+  /// 是否為截圖或螢幕錄影：Android 依所在資料夾，iOS 依媒體子類型。
+  static bool isScreenshot(AssetEntity a) {
+    if (Platform.isIOS) return a.subtype & _iosScreenshotSubtype != 0;
+    final path = a.relativePath;
+    return path != null && _screenshotPath.hasMatch(path);
+  }
+
   static AssetRecord toRecord(AssetEntity a) {
     final hasGps = (a.latitude ?? 0) != 0 || (a.longitude ?? 0) != 0;
     return AssetRecord(
+      screenshot: isScreenshot(a),
       id: a.id,
       isVideo: a.type == AssetType.video,
       createTs: a.createDateSecond ?? 0,

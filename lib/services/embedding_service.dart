@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -49,9 +50,51 @@ Float32List normalizeRgba(
   return out;
 }
 
+/// 前處理結果：模型輸入與清晰度。
+class PreparedImage {
+  const PreparedImage(this.input, this.sharpness);
+  final Float32List input;
+
+  /// Laplacian 變異數，越小越模糊（O10）。
+  final double sharpness;
+}
+
+/// 灰階 Laplacian 變異數：常用的模糊程度指標，數值越小越模糊。
+double laplacianVariance(Uint8List rgba, int width, int height) {
+  if (width < 3 || height < 3) return 0;
+  final gray = Float64List(width * height);
+  for (var i = 0, p = 0; i < gray.length; i++, p += 4) {
+    gray[i] = 0.299 * rgba[p] + 0.587 * rgba[p + 1] + 0.114 * rgba[p + 2];
+  }
+  var sum = 0.0, sumSq = 0.0;
+  var n = 0;
+  for (var y = 1; y < height - 1; y++) {
+    for (var x = 1; x < width - 1; x++) {
+      final i = y * width + x;
+      final v =
+          gray[i - 1] +
+          gray[i + 1] +
+          gray[i - width] +
+          gray[i + width] -
+          4 * gray[i];
+      sum += v;
+      sumSq += v * v;
+      n++;
+    }
+  }
+  final mean = sum / n;
+  return sumSq / n - mean * mean;
+}
+
 /// 以平台原生解碼器（Flutter engine）解碼並縮放，比純 Dart 解碼快得多。
 /// 解碼失敗回傳 null。
 Future<Float32List?> preprocessImage(
+  Uint8List bytes,
+  PreprocessSpec spec,
+) async => (await prepareImage(bytes, spec))?.input;
+
+/// 解碼、縮放、正規化，並計算清晰度。解碼失敗回傳 null。
+Future<PreparedImage?> prepareImage(
   Uint8List bytes,
   PreprocessSpec spec,
 ) async {
@@ -81,11 +124,13 @@ Future<Float32List?> preprocessImage(
     image = (await codec.getNextFrame()).image;
     final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     if (data == null) return null;
-    return normalizeRgba(
-      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
-      image.width,
-      image.height,
-      spec,
+    final rgba = data.buffer.asUint8List(
+      data.offsetInBytes,
+      data.lengthInBytes,
+    );
+    return PreparedImage(
+      normalizeRgba(rgba, image.width, image.height, spec),
+      laplacianVariance(rgba, image.width, image.height),
     );
   } on Object {
     return null;
@@ -105,20 +150,52 @@ class EmbeddingService {
   final BertTokenizer _tokenizer;
 
   static Future<EmbeddingService> load(InstalledModel model) async {
-    OrtEnv.instance.init();
-    OrtSession open(String key) {
-      final opts = OrtSessionOptions()
-        ..setIntraOpNumThreads(Platform.numberOfProcessors.clamp(1, 4))
-        ..setSessionGraphOptimizationLevel(GraphOptimizationLevel.ortEnableAll);
-      return OrtSession.fromFile(File(model.path(key)), opts);
-    }
+    final imagePath = model.path('image');
+    final textPath = model.path('text');
+    final threads = Platform.numberOfProcessors.clamp(1, 4);
+    // 建立 session（讀檔 + 圖最佳化）需要數秒且是同步呼叫，放在 UI isolate 會讓畫面卡住；
+    // 改在另一個 isolate 建立，只把原生指標位址傳回來。
+    final addresses = await Isolate.run(() {
+      OrtEnv.instance.init();
+      int open(String path) {
+        final opts = OrtSessionOptions()
+          ..setIntraOpNumThreads(threads)
+          ..setSessionGraphOptimizationLevel(
+            GraphOptimizationLevel.ortEnableAll,
+          );
+        try {
+          return OrtSession.fromFile(File(path), opts).address;
+        } finally {
+          opts.release();
+        }
+      }
 
+      return [open(imagePath), open(textPath)];
+    });
+    OrtEnv.instance.init();
     final vocab = await File(model.path('vocab')).readAsString();
     return EmbeddingService._(
       model,
-      open('image'),
-      open('text'),
+      OrtSession.fromAddress(addresses[0]),
+      OrtSession.fromAddress(addresses[1]),
       BertTokenizer.fromVocabText(vocab),
+    );
+  }
+
+  PreprocessSpec get _spec {
+    final m = model.manifest;
+    return PreprocessSpec(m.imageSize, m.mean, m.std, m.centerCrop);
+  }
+
+  /// 解碼與前處理（可與上一張的推論同時進行）。
+  Future<PreparedImage?> prepare(Uint8List bytes) => prepareImage(bytes, _spec);
+
+  /// 以前處理好的輸入推論。
+  Future<Float32List?> embedPrepared(PreparedImage image) {
+    final s = model.manifest.imageSize;
+    return _run(
+      _image,
+      OrtValueTensor.createTensorWithDataList(image.input, [1, 3, s, s]),
     );
   }
 
@@ -127,17 +204,8 @@ class EmbeddingService {
 
   /// 影像（JPEG/PNG bytes）→ 已正規化的 embedding。
   Future<Float32List?> embedImage(Uint8List bytes) async {
-    final m = model.manifest;
-    final spec = PreprocessSpec(m.imageSize, m.mean, m.std, m.centerCrop);
-    final input = await preprocessImage(bytes, spec);
-    if (input == null) return null;
-    final tensor = OrtValueTensor.createTensorWithDataList(input, [
-      1,
-      3,
-      m.imageSize,
-      m.imageSize,
-    ]);
-    return _run(_image, tensor);
+    final prepared = await prepare(bytes);
+    return prepared == null ? null : embedPrepared(prepared);
   }
 
   /// 文字 → 已正規化的 embedding。

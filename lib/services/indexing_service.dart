@@ -4,6 +4,7 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../data/local_store.dart';
 import '../data/media_repository.dart';
+import '../data/setting_keys.dart';
 import 'embedding_service.dart';
 import 'ocr_service.dart';
 
@@ -18,6 +19,7 @@ class IndexProgress {
     this.videos = 0,
     this.syncing = false,
     this.syncError,
+    this.msPerItem,
   });
   final int total;
   final int done;
@@ -37,6 +39,9 @@ class IndexProgress {
   /// 最近一次讀取媒體庫失敗的原因。
   final String? syncError;
 
+  /// 本次執行平均每個項目的耗時（毫秒）；尚無資料為 null。
+  final int? msPerItem;
+
   int get photos => total - videos;
 
   IndexProgress withSync({required bool syncing, String? error}) =>
@@ -50,6 +55,7 @@ class IndexProgress {
         videos: videos,
         syncing: syncing,
         syncError: error,
+        msPerItem: msPerItem,
       );
 
   int get pending => total - done - failed;
@@ -59,15 +65,18 @@ class IndexProgress {
 /// 索引停止的條件（非同步，例如檢查前景 App 是否在執行）。
 typedef StopCheck = Future<bool> Function();
 
-/// 預先讀取好的媒體資料：推論目前項目時，下一個項目的縮圖已在讀取中。
+/// 預先處理好的項目：推論目前項目時，下一個項目已在讀取、解碼。
 class _Prepared {
-  const _Prepared(this.record, this.frames);
+  const _Prepared(this.record, this.images);
   final AssetRecord record;
-  final List<Uint8List> frames;
+
+  /// 已前處理的畫面（相片一張，影片多張）。
+  final List<PreparedImage> images;
 }
 
-/// 索引管線（C5/C7/O9）：增量同步 → 計算 embedding → 讀取 GPS →（選用）OCR。
-/// 每個項目完成即落盤，因此中斷後可從斷點續做；前景與背景索引共用此流程。
+/// 索引管線（C5/C7/O9/O10）：增量同步 → 語意索引（含清晰度）→ GPS →
+/// 補算清晰度 →（選用）OCR。每個項目完成即落盤，中斷後可從斷點續做；
+/// 前景與背景索引共用此流程。
 class IndexingService {
   IndexingService(this.store, this.media, {this.ocr = const OcrService()});
 
@@ -85,7 +94,16 @@ class IndexingService {
   void cancel() => _cancel = true;
 
   /// 與裝置媒體清單同步（新增／刪除／修改）。
-  Future<void> sync() async => store.syncAssets(await media.allRecords());
+  /// 先比對媒體庫指紋，沒有變動就略過完整列舉（1 萬張需數秒）。
+  Future<void> sync({bool force = false}) async {
+    final signature = await media.signature();
+    if (!force &&
+        signature == await store.getSetting(SettingKeys.mediaSignature)) {
+      return;
+    }
+    await store.syncAssets(await media.allRecords());
+    await store.setSetting(SettingKeys.mediaSignature, signature);
+  }
 
   Future<IndexProgress> progress(
     String? modelVersion, {
@@ -131,6 +149,8 @@ class IndexingService {
     // 只在開始時查一次總數，之後以本地計數更新，並限制回報頻率。
     var base = const IndexProgress();
     var done = 0, failed = 0, ocrDone = 0;
+    final clock = Stopwatch();
+    var timed = 0;
     var lastReport = DateTime.fromMillisecondsSinceEpoch(0);
     void report({bool force = false}) {
       if (onProgress == null) return;
@@ -146,6 +166,7 @@ class IndexingService {
           ocrTotal: base.ocrTotal,
           ocrDone: base.ocrDone + ocrDone,
           running: true,
+          msPerItem: timed == 0 ? null : clock.elapsedMilliseconds ~/ timed,
         ),
       );
     }
@@ -157,38 +178,46 @@ class IndexingService {
       report(force: true);
 
       if (embedder != null) {
+        // 讀縮圖、解碼、前處理都在 prepare 完成，與上一個項目的推論重疊。
+        Future<_Prepared> prepare(AssetRecord r) async {
+          try {
+            final entity = await AssetEntity.fromId(r.id);
+            final frames = entity == null
+                ? const <Uint8List>[]
+                : await media.framesFor(entity);
+            final images = <PreparedImage>[];
+            for (final f in frames) {
+              final p = await embedder.prepare(f);
+              if (p != null) images.add(p);
+            }
+            return _Prepared(r, images);
+          } on Object {
+            return _Prepared(r, const []);
+          }
+        }
+
+        clock.start();
         while (!await stopped()) {
           final batch = await store.pendingAssets(
             embedder.version,
             photosOnly: photosOnly,
           );
           if (batch.isEmpty) break;
-          Future<_Prepared> prepare(AssetRecord r) async {
-            try {
-              final entity = await AssetEntity.fromId(r.id);
-              return _Prepared(
-                r,
-                entity == null ? const [] : await media.framesFor(entity),
-              );
-            } on Object {
-              return _Prepared(r, const []);
-            }
-          }
-
           var next = prepare(batch.first);
           for (var i = 0; i < batch.length; i++) {
             final current = await next;
-            // 推論目前項目時，同時讀取下一個項目的縮圖。
             if (i + 1 < batch.length) next = prepare(batch[i + 1]);
             if (await _embed(current, embedder)) {
               done++;
             } else {
               failed++;
             }
+            timed++;
             report();
             if (await stopped()) break;
           }
         }
+        clock.stop();
       }
 
       // GPS 不影響語意搜尋，放在語意索引之後讀取。
@@ -197,6 +226,16 @@ class IndexingService {
         if (batch.isEmpty) break;
         for (final rec in batch) {
           await _locate(rec);
+          if (await stopped()) break;
+        }
+      }
+
+      // 舊版資料庫升級後補算清晰度（新索引的相片在語意索引時已一併計算）。
+      while (!await stopped()) {
+        final batch = await store.pendingSharpness();
+        if (batch.isEmpty) break;
+        for (final rec in batch) {
+          await _sharpness(rec, embedder);
           if (await stopped()) break;
         }
       }
@@ -216,7 +255,18 @@ class IndexingService {
       completed = !await stopped();
     } finally {
       _running = false;
-      onProgress?.call(await progress(version));
+      final last = await progress(version);
+      onProgress?.call(
+        IndexProgress(
+          total: last.total,
+          videos: last.videos,
+          done: last.done,
+          failed: last.failed,
+          ocrTotal: last.ocrTotal,
+          ocrDone: last.ocrDone,
+          msPerItem: timed == 0 ? null : clock.elapsedMilliseconds ~/ timed,
+        ),
+      );
     }
     return completed;
   }
@@ -224,19 +274,51 @@ class IndexingService {
   Future<bool> _embed(_Prepared p, EmbeddingService embedder) async {
     try {
       final vectors = <Float32List>[];
-      for (final frame in p.frames) {
-        final v = await embedder.embedImage(frame);
+      for (final image in p.images) {
+        final v = await embedder.embedPrepared(image);
         if (v != null) vectors.add(v);
       }
       if (vectors.isEmpty) {
         await store.markFailed(p.record.id);
         return false;
       }
-      await store.saveEmbeddings(p.record.id, vectors, embedder.version);
+      await store.saveEmbeddings(
+        p.record.id,
+        vectors,
+        embedder.version,
+        sharpness: p.record.isVideo ? null : p.images.first.sharpness,
+      );
       return true;
     } on Object {
       await store.markFailed(p.record.id);
       return false;
+    }
+  }
+
+  static const _defaultSpec = PreprocessSpec(
+    224,
+    [0.5, 0.5, 0.5],
+    [0.5, 0.5, 0.5],
+    false,
+  );
+
+  /// 只算清晰度（不推論）。沒有模型時用 224×224 的預設前處理。
+  Future<void> _sharpness(AssetRecord rec, EmbeddingService? embedder) async {
+    try {
+      final entity = await AssetEntity.fromId(rec.id);
+      final frames = entity == null
+          ? const <Uint8List>[]
+          : await media.framesFor(entity);
+      if (frames.isEmpty) {
+        await store.saveSharpness(rec.id, null);
+        return;
+      }
+      final p = embedder != null
+          ? await embedder.prepare(frames.first)
+          : await prepareImage(frames.first, _defaultSpec);
+      await store.saveSharpness(rec.id, p?.sharpness);
+    } on Object {
+      await store.saveSharpness(rec.id, null);
     }
   }
 

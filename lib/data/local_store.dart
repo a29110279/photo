@@ -22,10 +22,18 @@ class AssetRecord {
     this.duration = 0,
     this.lat,
     this.lng,
+    this.screenshot = false,
+    this.sharpness,
   });
 
   final String id;
   final bool isVideo;
+
+  /// 截圖或螢幕錄影（O10）。
+  final bool screenshot;
+
+  /// 清晰度（Laplacian 變異數，O10）；尚未計算為 null。
+  final double? sharpness;
 
   /// 秒（epoch）。
   final int createTs;
@@ -69,7 +77,7 @@ class LocalStore {
   LocalStore(this.db);
   final Database db;
 
-  static const _version = 3;
+  static const _version = 4;
 
   static Future<LocalStore> open(
     String path, {
@@ -97,6 +105,13 @@ class LocalStore {
               'UPDATE assets SET gps_state = 1 WHERE lat IS NOT NULL',
             );
           }
+          if (oldVersion < 4) {
+            // 截圖旗標由下次媒體同步補上；清晰度由索引管線補算。
+            await db.execute(
+              'ALTER TABLE assets ADD COLUMN screenshot INTEGER NOT NULL DEFAULT 0',
+            );
+            await db.execute('ALTER TABLE assets ADD COLUMN sharpness REAL');
+          }
         },
         onCreate: (db, _) async {
           await db.execute('''
@@ -111,7 +126,9 @@ CREATE TABLE assets(
   index_state INTEGER NOT NULL DEFAULT 0,
   model_version TEXT,
   ocr_state INTEGER NOT NULL DEFAULT 0,
-  gps_state INTEGER NOT NULL DEFAULT 0
+  gps_state INTEGER NOT NULL DEFAULT 0,
+  screenshot INTEGER NOT NULL DEFAULT 0,
+  sharpness REAL
 )''');
           await db.execute(
             'CREATE INDEX idx_assets_state ON assets(index_state, create_ts DESC)',
@@ -183,9 +200,16 @@ CREATE TABLE smart_album_items(
   /// 與裝置媒體清單同步：新增、移除已不存在者、修改過的重設為待索引。
   /// 回傳 (新增或變更數, 移除數)。
   Future<(int, int)> syncAssets(List<AssetRecord> current) async {
-    final rows = await db.query('assets', columns: ['id', 'modified_ts']);
+    final rows = await db.query(
+      'assets',
+      columns: ['id', 'modified_ts', 'screenshot'],
+    );
     final known = {
       for (final r in rows) r['id'] as String: r['modified_ts'] as int,
+    };
+    final shots = {
+      for (final r in rows)
+        if (r['screenshot'] == 1) r['id'] as String,
     };
     final seen = <String>{};
     var changed = 0;
@@ -205,6 +229,7 @@ CREATE TABLE smart_album_items(
           'lng': a.lng,
           // iOS 的座標在列舉時就拿得到；Android 需另外讀 EXIF。
           'gps_state': a.lat == null ? IndexState.pending : IndexState.done,
+          'screenshot': a.screenshot ? 1 : 0,
         });
       } else if (prev != a.modifiedTs) {
         changed++;
@@ -219,12 +244,22 @@ CREATE TABLE smart_album_items(
             'lat': a.lat,
             'lng': a.lng,
             'gps_state': a.lat == null ? IndexState.pending : IndexState.done,
+            'screenshot': a.screenshot ? 1 : 0,
+            'sharpness': null,
           },
           where: 'id = ?',
           whereArgs: [a.id],
         );
         batch.delete('embeddings', where: 'asset_id = ?', whereArgs: [a.id]);
         batch.delete('ocr', where: 'asset_id = ?', whereArgs: [a.id]);
+      } else if (shots.contains(a.id) != a.screenshot) {
+        // 舊版資料庫升級後補上截圖旗標。
+        batch.update(
+          'assets',
+          {'screenshot': a.screenshot ? 1 : 0},
+          where: 'id = ?',
+          whereArgs: [a.id],
+        );
       }
     }
     final removed = known.keys.where((id) => !seen.contains(id)).toList();
@@ -279,6 +314,7 @@ CREATE TABLE smart_album_items(
     String modelVersion, {
     double? lat,
     double? lng,
+    double? sharpness,
   }) async {
     await db.transaction((txn) async {
       await txn.delete(
@@ -300,6 +336,7 @@ CREATE TABLE smart_album_items(
           'index_state': IndexState.done,
           'model_version': modelVersion,
           'lat': ?lat,
+          'sharpness': ?sharpness,
           'lng': ?lng,
         },
         where: 'id = ?',
@@ -350,6 +387,49 @@ CREATE TABLE smart_album_items(
     await batch.commit(noResult: true);
     _matrix = null;
   }
+
+  // ---- 整理（O10） ----
+
+  /// 截圖與螢幕錄影（新到舊）。
+  Future<List<AssetRecord>> screenshots() async {
+    final rows = await db.query(
+      'assets',
+      where: 'screenshot = 1',
+      orderBy: 'create_ts DESC',
+    );
+    return rows.map(_toRecord).toList();
+  }
+
+  /// 清晰度最低的相片（由模糊到清晰），不含截圖。
+  Future<List<AssetRecord>> blurriest({int limit = 300}) async {
+    final rows = await db.query(
+      'assets',
+      where: 'is_video = 0 AND screenshot = 0 AND sharpness >= 0',
+      orderBy: 'sharpness ASC',
+      limit: limit,
+    );
+    return rows.map(_toRecord).toList();
+  }
+
+  /// 已索引但尚未計算清晰度的相片（舊版資料庫升級後）。
+  Future<List<AssetRecord>> pendingSharpness({int limit = 100}) async {
+    final rows = await db.query(
+      'assets',
+      where: 'is_video = 0 AND sharpness IS NULL AND index_state <> ?',
+      whereArgs: [IndexState.pending],
+      orderBy: 'create_ts DESC',
+      limit: limit,
+    );
+    return rows.map(_toRecord).toList();
+  }
+
+  /// 寫入清晰度；無法計算時寫入 -1，避免重複嘗試。
+  Future<void> saveSharpness(String assetId, double? sharpness) => db.update(
+    'assets',
+    {'sharpness': sharpness ?? -1},
+    where: 'id = ?',
+    whereArgs: [assetId],
+  );
 
   // ---- GPS（延後讀取） ----
 
@@ -540,6 +620,8 @@ CREATE TABLE smart_album_items(
     duration: r['duration'] as int,
     lat: (r['lat'] as num?)?.toDouble(),
     lng: (r['lng'] as num?)?.toDouble(),
+    screenshot: r['screenshot'] == 1,
+    sharpness: (r['sharpness'] as num?)?.toDouble(),
   );
 
   // ---- 操作日誌 ----
