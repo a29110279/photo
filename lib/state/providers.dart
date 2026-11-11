@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:isolate';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +13,7 @@ import '../data/media_repository.dart';
 import '../services/album_service.dart';
 import '../services/duplicate_service.dart';
 import '../services/embedding_service.dart';
+import '../services/event_service.dart';
 import '../services/indexing_service.dart';
 import '../services/model_service.dart';
 import '../services/search_service.dart';
@@ -471,3 +473,14 @@ final screenshotsProvider = FutureProvider.autoDispose<List<AssetRecord>>(
 final blurriestProvider = FutureProvider.autoDispose<List<AssetRecord>>(
   (ref) => ref.watch(storeProvider).blurriest(),
 );
+
+// ---- 事件（O11） ----
+
+final eventsProvider = FutureProvider.autoDispose<List<PhotoEvent>>((
+  ref,
+) async {
+  // 索引進度更新（例如讀到新的 GPS）時重新分群。
+  ref.watch(indexProvider.select((p) => p.running));
+  final assets = await ref.watch(storeProvider).allAssets();
+  return Isolate.run(() => clusterEvents(assets));
+});

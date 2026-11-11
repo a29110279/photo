@@ -4,6 +4,7 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../data/local_store.dart';
 import '../services/album_service.dart';
+import '../services/event_service.dart';
 import '../state/providers.dart';
 import 'asset_widgets.dart';
 
@@ -14,7 +15,7 @@ class AlbumsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('相簿'),
@@ -32,13 +33,19 @@ class AlbumsPage extends ConsumerWidget {
           bottom: const TabBar(
             tabs: [
               Tab(text: '相簿'),
+              Tab(text: '事件'),
               Tab(text: '智慧相簿'),
               Tab(text: '操作紀錄'),
             ],
           ),
         ),
         body: const TabBarView(
-          children: [_AlbumList(), _SmartAlbumList(), _OpLogList()],
+          children: [
+            _AlbumList(),
+            _EventList(),
+            _SmartAlbumList(),
+            _OpLogList(),
+          ],
         ),
       ),
     );
@@ -394,5 +401,156 @@ class _SmartAlbumPageState extends ConsumerState<SmartAlbumPage> {
     await ref.read(storeProvider).deleteSmartAlbum(widget.rule.id);
     ref.invalidate(smartAlbumsProvider);
     if (mounted) Navigator.pop(context);
+  }
+}
+
+// ---- 事件（O11） ----
+
+class _EventList extends ConsumerWidget {
+  const _EventList();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return ref
+        .watch(eventsProvider)
+        .when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('$e')),
+          data: (events) => events.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      '依拍攝時間與地點自動分組（至少 5 個項目）。媒體庫讀取完成後會出現在這裡。',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  itemCount: events.length,
+                  itemBuilder: (_, i) {
+                    final e = events[i];
+                    return ListTile(
+                      leading: SizedBox(
+                        width: 56,
+                        height: 56,
+                        child: AssetTile(
+                          assetId: e.assetIds.first,
+                          onTap: () => _open(context, e),
+                        ),
+                      ),
+                      title: Text(e.title),
+                      subtitle: Text('${e.assetIds.length} 個項目'),
+                      onTap: () => _open(context, e),
+                    );
+                  },
+                ),
+        );
+  }
+
+  void _open(BuildContext context, PhotoEvent e) =>
+      Navigator.of(context)
+          .push(MaterialPageRoute<void>(builder: (_) => EventPage(event: e)));
+}
+
+/// 事件內容，可一鍵建立相簿。
+class EventPage extends ConsumerWidget {
+  const EventPage({super.key, required this.event});
+  final PhotoEvent event;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ids = event.assetIds;
+    return Scaffold(
+      appBar: AppBar(title: Text(event.title)),
+      body: GridView.builder(
+        padding: const EdgeInsets.all(2),
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 130,
+          mainAxisSpacing: 2,
+          crossAxisSpacing: 2,
+        ),
+        itemCount: ids.length,
+        itemBuilder: (_, i) =>
+            AssetTile(key: ValueKey(ids[i]), assetId: ids[i]),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        icon: const Icon(Icons.create_new_folder_outlined),
+        label: Text(AlbumService.movesFiles ? '搬移成相簿' : '建立相簿'),
+        onPressed: () => _createAlbum(context, ref),
+      ),
+    );
+  }
+
+  Future<void> _createAlbum(BuildContext context, WidgetRef ref) async {
+    final controller = TextEditingController(text: event.suggestedAlbumName);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        String? error;
+        return StatefulBuilder(
+          builder: (context, setState) => AlertDialog(
+            title: Text(AlbumService.movesFiles ? '搬移成相簿' : '建立相簿'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('共 ${event.assetIds.length} 個項目'),
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: '相簿名稱',
+                    errorText: error,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  AlbumService.movesFiles
+                      ? '檔案會實際搬到 ${AlbumService.androidPath('<相簿名稱>')}，'
+                            '系統會跳出一次授權確認。可從「相簿 › 操作紀錄」復原。'
+                      : '項目會加入相簿，原本的位置不變。可從「相簿 › 操作紀錄」復原。',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final err = AlbumService.validateName(controller.text);
+                  if (err != null) {
+                    setState(() => error = err);
+                  } else {
+                    Navigator.pop(context, controller.text.trim());
+                  }
+                },
+                child: const Text('確認'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    controller.dispose();
+    if (name == null || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final r = await ref
+          .read(albumServiceProvider)
+          .addToAlbum(name, event.assetIds);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('已${r.moved ? '搬移' : '加入'} ${r.count} 個項目到「$name」'),
+        ),
+      );
+      ref.invalidate(opLogProvider);
+      ref.invalidate(albumsProvider);
+    } on Object catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    }
   }
 }

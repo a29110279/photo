@@ -570,6 +570,12 @@ CREATE TABLE smart_album_items(
   }
 
   /// 依 metadata 條件過濾，回傳符合的 asset（新到舊）。
+  /// 全部項目（事件分群用，O11）。
+  Future<List<AssetRecord>> allAssets() async => (await db.query(
+    'assets',
+    orderBy: 'create_ts ASC',
+  )).map(_toRecord).toList();
+
   Future<List<AssetRecord>> filterAssets(ParsedQuery q) async {
     final where = <String>[];
     final args = <Object?>[];
