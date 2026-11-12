@@ -35,7 +35,8 @@ jobs:
           pip install -r tools/requirements.txt
 
       - name: Export
-        run: python tools/export_model.py --out dist/model --quantize --min-cos 0.96
+        # 影像輸入 160px：索引速度約為 224px 的 2 倍，中文檢索 R@10 約 90% → 85%（見 Evaluate models）。
+        run: python tools/export_model.py --out dist/model --quantize --min-cos 0.96 --image-size 160
 
       - name: Verify ONNX against PyTorch
         run: python tools/verify_model.py --model-dir dist/model --cases dist/tokenizer_cases.json
