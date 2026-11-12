@@ -66,3 +66,7 @@ __pycache__/
 # 內建模型檔（由 CI 放入，見 .github/workflows/build-apk.yml）
 /assets/model/*
 !/assets/model/.gitkeep
+
+eval_cache/
+eval_report.md
+app_model/

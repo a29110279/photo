@@ -1,0 +1,42 @@
+# 評估候選模型的中文搜尋準確度與速度（手動執行）。結果在該次執行的 Summary 與 Artifacts。
+name: Evaluate models
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install transformers pillow onnxruntime sentence-transformers \
+            opencc-python-reimplemented requests numpy tqdm six
+          pip install --no-deps cn_clip
+      - name: Download the model bundled in the app (optional)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow export-model.yml \
+            --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -n "$run_id" ]; then
+            gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n photo-prompt-model -D app_model || true
+          fi
+      - name: Evaluate
+        run: python tools/poc/eval_zh_retrieval.py --out eval_report.md --onnx-dir app_model
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report
+          path: eval_report.md
+          retention-days: 30
