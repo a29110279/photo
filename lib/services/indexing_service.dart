@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:typed_data';
 
 import 'package:photo_manager/photo_manager.dart';
@@ -21,6 +22,7 @@ class IndexProgress {
     this.syncing = false,
     this.syncError,
     this.msPerItem,
+    this.timing,
     this.faceTotal = 0,
     this.faceDone = 0,
   });
@@ -45,6 +47,9 @@ class IndexProgress {
   /// 本次執行平均每個項目的耗時（毫秒）；尚無資料為 null。
   final int? msPerItem;
 
+  /// 各步驟的平均耗時說明（找瓶頸用）；尚無資料為 null。
+  final String? timing;
+
   /// 人物分群（O12）：需偵測人臉的相片數與已處理數。
   final int faceTotal;
   final int faceDone;
@@ -63,6 +68,7 @@ class IndexProgress {
         syncing: syncing,
         syncError: error,
         msPerItem: msPerItem,
+        timing: timing,
         faceTotal: faceTotal,
         faceDone: faceDone,
       );
@@ -83,6 +89,18 @@ class _Prepared {
   final List<PreparedImage> images;
 }
 
+/// 各步驟累計耗時（微秒）。讀圖與解碼是並行進行的，數字為每個項目各自花的時間。
+class _StepTimes {
+  int fetch = 0, decode = 0, infer = 0, save = 0, items = 0;
+
+  String? describe(int? threads) {
+    if (items == 0) return null;
+    int ms(int micros) => (micros / 1000 / items).round();
+    return '讀圖 ${ms(fetch)}・解碼 ${ms(decode)}・推論 ${ms(infer)}・寫入 ${ms(save)} 毫秒'
+        '${threads == null ? '' : '（$threads 執行緒）'}';
+  }
+}
+
 /// 索引管線（C5/C7/O9/O10）：增量同步 → 語意索引（含清晰度）→ GPS →
 /// 補算清晰度 →（選用）OCR。每個項目完成即落盤，中斷後可從斷點續做；
 /// 前景與背景索引共用此流程。
@@ -92,6 +110,9 @@ class IndexingService {
   final LocalStore store;
   final MediaRepository media;
   final OcrService ocr;
+
+  /// 預先準備的項目數。
+  static const prefetch = 3;
 
   /// 進度回報的最短間隔：每張都查詢資料庫計數會拖慢索引。
   static const progressInterval = Duration(milliseconds: 500);
@@ -163,6 +184,7 @@ class IndexingService {
     var base = const IndexProgress();
     var done = 0, failed = 0, ocrDone = 0, faceDone = 0;
     final clock = Stopwatch();
+    final steps = _StepTimes();
     var timed = 0;
     var lastReport = DateTime.fromMillisecondsSinceEpoch(0);
     void report({bool force = false}) {
@@ -182,6 +204,7 @@ class IndexingService {
           faceDone: base.faceDone + faceDone,
           running: true,
           msPerItem: timed == 0 ? null : clock.elapsedMilliseconds ~/ timed,
+          timing: steps.describe(embedder?.threads),
         ),
       );
     }
@@ -196,15 +219,19 @@ class IndexingService {
         // 讀縮圖、解碼、前處理都在 prepare 完成，與上一個項目的推論重疊。
         Future<_Prepared> prepare(AssetRecord r) async {
           try {
+            final sw = Stopwatch()..start();
             final entity = await AssetEntity.fromId(r.id);
             final frames = entity == null
                 ? const <Uint8List>[]
                 : await media.framesFor(entity);
+            steps.fetch += sw.elapsedMicroseconds;
+            sw.reset();
             final images = <PreparedImage>[];
             for (final f in frames) {
               final p = await embedder.prepare(f);
               if (p != null) images.add(p);
             }
+            steps.decode += sw.elapsedMicroseconds;
             return _Prepared(r, images);
           } on Object {
             return _Prepared(r, const []);
@@ -218,16 +245,26 @@ class IndexingService {
             photosOnly: photosOnly,
           );
           if (batch.isEmpty) break;
-          var next = prepare(batch.first);
-          for (var i = 0; i < batch.length; i++) {
-            final current = await next;
-            if (i + 1 < batch.length) next = prepare(batch[i + 1]);
-            if (await _embed(current, embedder)) {
+          // 推論一張的同時，預先準備後面 [prefetch] 張（讀圖與解碼在原生執行緒並行）。
+          final queue = Queue<Future<_Prepared>>();
+          var nextIndex = 0;
+          void fill() {
+            while (queue.length < prefetch && nextIndex < batch.length) {
+              queue.add(prepare(batch[nextIndex++]));
+            }
+          }
+
+          fill();
+          while (queue.isNotEmpty) {
+            final current = await queue.removeFirst();
+            fill();
+            if (await _embed(current, embedder, steps)) {
               done++;
             } else {
               failed++;
             }
             timed++;
+            steps.items++;
             report();
             if (await stopped()) break;
           }
@@ -296,29 +333,38 @@ class IndexingService {
           faceTotal: last.faceTotal,
           faceDone: last.faceDone,
           msPerItem: timed == 0 ? null : clock.elapsedMilliseconds ~/ timed,
+          timing: steps.describe(embedder?.threads),
         ),
       );
     }
     return completed;
   }
 
-  Future<bool> _embed(_Prepared p, EmbeddingService embedder) async {
+  Future<bool> _embed(
+    _Prepared p,
+    EmbeddingService embedder,
+    _StepTimes steps,
+  ) async {
     try {
+      final sw = Stopwatch()..start();
       final vectors = <Float32List>[];
       for (final image in p.images) {
         final v = await embedder.embedPrepared(image);
         if (v != null) vectors.add(v);
       }
+      steps.infer += sw.elapsedMicroseconds;
       if (vectors.isEmpty) {
         await store.markFailed(p.record.id);
         return false;
       }
+      sw.reset();
       await store.saveEmbeddings(
         p.record.id,
         vectors,
         embedder.version,
         sharpness: p.record.isVideo ? null : p.images.first.sharpness,
       );
+      steps.save += sw.elapsedMicroseconds;
       return true;
     } on Object {
       await store.markFailed(p.record.id);

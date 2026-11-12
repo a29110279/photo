@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -140,9 +141,27 @@ Future<PreparedImage?> prepareImage(
   }
 }
 
+/// 影像推論要測試的執行緒數：2、4、6、8 中不超過核心數者。
+List<int> threadCandidates(int processors) {
+  final out = [
+    for (final t in const [2, 4, 6, 8])
+      if (t <= processors) t,
+  ];
+  return out.isEmpty ? [processors.clamp(1, 4)] : out;
+}
+
 /// 裝置端 CLIP 推論（ONNX Runtime）。解碼用平台原生解碼器，推論在背景 Isolate 執行。
 class EmbeddingService {
-  EmbeddingService._(this.model, this._image, this._text, this._tokenizer);
+  EmbeddingService._(
+    this.model,
+    this._image,
+    this._text,
+    this._tokenizer,
+    this.threads,
+  );
+
+  /// 影像推論使用的執行緒數（實測選出）。
+  final int threads;
 
   final InstalledModel model;
   final OrtSession _image;
@@ -152,34 +171,119 @@ class EmbeddingService {
   static Future<EmbeddingService> load(InstalledModel model) async {
     final imagePath = model.path('image');
     final textPath = model.path('text');
-    final threads = Platform.numberOfProcessors.clamp(1, 4);
+    final size = model.manifest.imageSize;
+    final tuningFile = File('${model.dir}/tuning.json');
+    final processors = Platform.numberOfProcessors;
+
+    // 上次測速選出的執行緒數（依模型版本與核心數快取）。
+    int? cached;
+    try {
+      final t = jsonDecode(await tuningFile.readAsString()) as Map;
+      if (t['version'] == model.manifest.version &&
+          t['processors'] == processors) {
+        cached = t['threads'] as int;
+      }
+    } on Object {
+      cached = null;
+    }
+    final candidates = cached != null ? [cached] : threadCandidates(processors);
+
     // 建立 session（讀檔 + 圖最佳化）需要數秒且是同步呼叫，放在 UI isolate 會讓畫面卡住；
     // 改在另一個 isolate 建立，只把原生指標位址傳回來。
-    final addresses = await Isolate.run(() {
+    final r = await Isolate.run(() {
       OrtEnv.instance.init();
-      int open(String path) {
+      OrtSession open(String path, int threads) {
         final opts = OrtSessionOptions()
           ..setIntraOpNumThreads(threads)
           ..setSessionGraphOptimizationLevel(
             GraphOptimizationLevel.ortEnableAll,
           );
         try {
-          return OrtSession.fromFile(File(path), opts).address;
+          return OrtSession.fromFile(File(path), opts);
         } finally {
           opts.release();
         }
       }
 
-      return [open(imagePath), open(textPath)];
+      // 影像模型：各種執行緒數實測推論時間，留下最快的（只在首次或換模型時做）。
+      // 手機的大小核配置各不相同，固定值不一定最快。
+      OrtSession? best;
+      var bestThreads = candidates.first;
+      double? bestMs;
+      for (final threads in candidates) {
+        final session = open(imagePath, threads);
+        if (candidates.length == 1) {
+          best = session;
+          break;
+        }
+        final ms = _benchmark(session, size);
+        if (bestMs == null || ms < bestMs) {
+          best?.release();
+          best = session;
+          bestThreads = threads;
+          bestMs = ms;
+        } else {
+          session.release();
+        }
+      }
+      return (
+        image: best!.address,
+        text: open(textPath, bestThreads.clamp(1, 4)).address,
+        threads: bestThreads,
+        ms: bestMs,
+      );
     });
+    if (cached == null) {
+      try {
+        await tuningFile.writeAsString(
+          jsonEncode({
+            'version': model.manifest.version,
+            'processors': processors,
+            'threads': r.threads,
+            'ms': r.ms,
+          }),
+        );
+      } on Object {
+        // 寫不進去只是下次再測一次。
+      }
+    }
     OrtEnv.instance.init();
     final vocab = await File(model.path('vocab')).readAsString();
     return EmbeddingService._(
       model,
-      OrtSession.fromAddress(addresses[0]),
-      OrtSession.fromAddress(addresses[1]),
+      OrtSession.fromAddress(r.image),
+      OrtSession.fromAddress(r.text),
       BertTokenizer.fromVocabText(vocab),
+      r.threads,
     );
+  }
+
+  /// 以全零輸入實測單次推論的平均毫秒數（先暖機一次）。
+  static double _benchmark(OrtSession session, int size) {
+    final input = OrtValueTensor.createTensorWithDataList(
+      Float32List(3 * size * size),
+      [1, 3, size, size],
+    );
+    final options = OrtRunOptions();
+    void once() {
+      final out = session.run(options, {session.inputNames.first: input});
+      for (final o in out) {
+        o?.release();
+      }
+    }
+
+    try {
+      once();
+      const runs = 3;
+      final sw = Stopwatch()..start();
+      for (var i = 0; i < runs; i++) {
+        once();
+      }
+      return sw.elapsedMicroseconds / 1000 / runs;
+    } finally {
+      input.release();
+      options.release();
+    }
   }
 
   PreprocessSpec get _spec {

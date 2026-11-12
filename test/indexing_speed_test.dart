@@ -27,6 +27,13 @@ void main() {
   });
   tearDown(() => store.close());
 
+  test('推論執行緒候選：不超過核心數', () {
+    expect(threadCandidates(8), [2, 4, 6, 8]);
+    expect(threadCandidates(6), [2, 4, 6]);
+    expect(threadCandidates(4), [2, 4]);
+    expect(threadCandidates(1), [1]);
+  });
+
   group('normalizeRgba', () {
     const spec = PreprocessSpec(2, [0.5, 0.5, 0.5], [0.5, 0.5, 0.5], false);
 

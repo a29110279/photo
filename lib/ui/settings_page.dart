@@ -73,6 +73,11 @@ class SettingsPage extends ConsumerWidget {
                     : '$status（平均每個項目 ${index.msPerItem} 毫秒）',
                 style: small,
               ),
+              if (index.timing != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('每個項目：${index.timing}', style: small),
+                ),
               if (model.error != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
