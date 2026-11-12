@@ -10,20 +10,18 @@ import 'albums_page.dart';
 import 'cleanup_page.dart';
 import 'search_page.dart';
 import 'settings_page.dart';
+import 'theme.dart';
 
 class PhotoPromptApp extends StatelessWidget {
   const PhotoPromptApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    ThemeData theme(Brightness b) => ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal, brightness: b),
-      useMaterial3: true,
-    );
     return MaterialApp(
       title: '理理相簿',
-      theme: theme(Brightness.light),
-      darkTheme: theme(Brightness.dark),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      debugShowCheckedModeBanner: false,
       home: const PermissionGate(),
     );
   }
@@ -52,22 +50,34 @@ class PermissionGate extends ConsumerWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.photo_library_outlined, size: 72),
-                  const SizedBox(height: 16),
-                  Text(
-                    '需要相片存取權限',
-                    style: Theme.of(context).textTheme.headlineSmall,
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(36),
+                    child: Image.asset(
+                      'assets/branding/logo.png',
+                      width: 160,
+                      height: 160,
+                    ),
                   ),
+                  const SizedBox(height: 24),
+                  Text(
+                    '歡迎使用理理相簿',
+                    style: Theme.of(context).textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('用一句話找到想要的相片，並整理成相簿。'),
+                  const SizedBox(height: 4),
                   const SizedBox(height: 8),
                   const Text(
                     '所有分析都在這台裝置上進行，相片與搜尋內容不會離開裝置。',
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
-                  FilledButton(
+                  FilledButton.icon(
                     onPressed: () =>
                         ref.read(permissionProvider.notifier).request(),
-                    child: const Text('授權存取'),
+                    icon: const Icon(Icons.photo_library_outlined),
+                    label: const Text('授權存取相片'),
                   ),
                   if (denied)
                     TextButton(

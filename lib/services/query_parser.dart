@@ -2,6 +2,9 @@ import 'gazetteer.dart';
 
 enum MediaKind { image, video }
 
+/// 可個別移除的搜尋條件。
+enum QueryPart { date, place, kind, person, text, semantic }
+
 /// 規則式解析結果：結構化條件 + 剩餘語意查詢。
 class ParsedQuery {
   const ParsedQuery({
@@ -50,6 +53,35 @@ class ParsedQuery {
     textTerms: textTerms,
     person: name,
   );
+
+  /// 移除一項條件（搜尋頁條件標籤上的 X）。[term] 指定要移除的 OCR 字詞。
+  ParsedQuery without(QueryPart part, {String? term}) => ParsedQuery(
+    raw: raw,
+    from: part == QueryPart.date ? null : from,
+    to: part == QueryPart.date ? null : to,
+    months: part == QueryPart.date ? null : months,
+    dateLabel: part == QueryPart.date ? null : dateLabel,
+    kind: part == QueryPart.kind ? null : kind,
+    place: part == QueryPart.place ? null : place,
+    semantic: part == QueryPart.semantic ? '' : semantic,
+    textTerms: part == QueryPart.text
+        ? [
+            for (final t in textTerms)
+              if (t != term) t,
+          ]
+        : textTerms,
+    person: part == QueryPart.person ? null : person,
+  );
+
+  /// 由目前的條件組回提示詞（重新解析會得到相同條件）。
+  String toPrompt() => [
+    ?dateLabel?.trim(),
+    ?place?.name,
+    ?person,
+    if (semantic.isNotEmpty) semantic,
+    if (kind != null) kind == MediaKind.video ? '影片' : '照片',
+    for (final t in textTerms) '「$t」',
+  ].join(' ');
 
   bool get hasFilter =>
       person != null ||

@@ -41,51 +41,56 @@ class AssetTile extends ConsumerWidget {
     return GestureDetector(
       onTap: onTap ?? preview,
       onLongPress: preview,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (entity == null)
-            ColoredBox(color: scheme.surfaceContainerHighest)
-          else
-            Image(
-              image: AssetEntityImageProvider(
-                entity,
-                isOriginal: false,
-                thumbnailSize: const ThumbnailSize.square(256),
-              ),
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => ColoredBox(
-                color: scheme.surfaceContainerHighest,
-                child: const Icon(Icons.broken_image_outlined),
-              ),
-            ),
-          if (entity?.type == AssetType.video)
-            Positioned(
-              left: 4,
-              bottom: 4,
-              child: _Chip('▶ ${formatDuration(entity!.duration)}'),
-            ),
-          if (badge != null)
-            Positioned(right: 4, bottom: 4, child: _Chip(badge!)),
-          if (selected != null)
-            Positioned(
-              right: 4,
-              top: 4,
-              child: Icon(
-                selected! ? Icons.check_circle : Icons.circle_outlined,
-                color: selected! ? scheme.primary : Colors.white70,
-                shadows: const [Shadow(blurRadius: 4)],
-              ),
-            ),
-          if (selected == true)
-            IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  border: Border.all(color: scheme.primary, width: 3),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (entity == null)
+              ColoredBox(color: scheme.surfaceContainerHighest)
+            else
+              Image(
+                image: AssetEntityImageProvider(
+                  entity,
+                  isOriginal: false,
+                  thumbnailSize: const ThumbnailSize.square(256),
+                ),
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => ColoredBox(
+                  color: scheme.surfaceContainerHighest,
+                  child: const Icon(Icons.broken_image_outlined),
                 ),
               ),
-            ),
-        ],
+            if (entity?.type == AssetType.video)
+              Positioned(
+                left: 4,
+                bottom: 4,
+                child: _Chip('▶ ${formatDuration(entity!.duration)}'),
+              ),
+            if (badge != null)
+              Positioned(right: 4, bottom: 4, child: _Chip(badge!)),
+            if (selected != null)
+              Positioned(
+                right: 4,
+                top: 4,
+                child: Icon(
+                  selected! ? Icons.check_circle : Icons.circle_outlined,
+                  color: selected! ? scheme.primary : Colors.white70,
+                  shadows: const [Shadow(blurRadius: 4)],
+                ),
+              ),
+            if (selected == true)
+              IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: scheme.primary, width: 3),
+                    borderRadius: BorderRadius.circular(10),
+                    color: scheme.primary.withValues(alpha: 0.15),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

@@ -66,6 +66,7 @@ flutter:
   # 內建語意模型（不進版本控制，由 Build APK workflow 從 Export model 的產物放入）。
   assets:
     - assets/model/
+    - assets/branding/logo.png
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -43,6 +44,22 @@ void main() {
     );
   });
   tearDown(() => store.close());
+
+  test('背景用獨立連線：關閉後前景連線仍可使用（database_closed 回歸測試）', () async {
+    final dir = await Directory.systemTemp.createTemp('db');
+    final path = '${dir.path}/app.db';
+    final fg = await LocalStore.open(path, factory: databaseFactoryFfi);
+    final bg = await LocalStore.open(
+      path,
+      factory: databaseFactoryFfi,
+      singleInstance: false,
+    );
+    await bg.syncAssets([rec('a')]);
+    await bg.close();
+    expect((await fg.indexStats(null)).total, 1);
+    await fg.close();
+    await dir.delete(recursive: true);
+  });
 
   group('媒體庫指紋', () {
     test('指紋沒變就略過完整列舉，變了才重新列舉', () async {

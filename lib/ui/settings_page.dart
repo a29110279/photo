@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../state/providers.dart';
+import 'theme.dart';
 
 /// 設定：索引進度（自動執行，不需手動操作）、文字辨識、權限。
 class SettingsPage extends ConsumerWidget {
@@ -16,7 +17,6 @@ class SettingsPage extends ConsumerWidget {
     final ocrOn = ref.watch(ocrEnabledProvider);
     final facesOn = ref.watch(facesEnabledProvider);
     final theme = Theme.of(context);
-    final titleStyle = theme.textTheme.titleMedium;
     final small = theme.textTheme.bodySmall;
     final errorStyle = TextStyle(color: theme.colorScheme.error);
 
@@ -27,109 +27,141 @@ class SettingsPage extends ConsumerWidget {
         : index.running
         ? '索引中…'
         : index.pending > 0
-        ? '尚有未完成的項目，App 開啟或手機閒置時會自動繼續'
+        ? '尚有未完成的項目，會在背景自動繼續'
         : '已完成';
+
+    final progress = index.syncing || index.total == 0
+        ? null
+        : (index.done + index.failed) / index.total;
 
     return Scaffold(
       appBar: AppBar(title: const Text('設定')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
         children: [
-          Text('索引', style: titleStyle),
-          const SizedBox(height: 12),
-          LinearProgressIndicator(
-            value: index.syncing || index.total == 0
-                ? null
-                : (index.done + index.failed) / index.total,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '${index.done} / ${index.total}'
-            '${index.failed > 0 ? '（${index.failed} 個無法處理）' : ''}',
-          ),
-          const SizedBox(height: 4),
-          Text(
-            index.msPerItem == null
-                ? status
-                : '$status（平均每個項目 ${index.msPerItem} 毫秒）',
-            style: small,
-          ),
-          if (model.error != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(model.error!, style: errorStyle),
-            ),
-          if (index.syncError != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text('讀取媒體庫失敗：${index.syncError}', style: errorStyle),
-            ),
-          const Divider(height: 32),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('文字辨識（OCR）'),
-            subtitle: Text(
-              ocrOn
-                  ? '已處理 ${index.ocrDone} / ${index.ocrTotal} 張相片。'
-                        '搜尋時用引號指定文字，例如：「發票」'
-                  : '可搜尋截圖、收據上的文字；會增加索引時間',
-            ),
-            value: ocrOn,
-            onChanged: (v) async {
-              await ref.read(ocrEnabledProvider.notifier).set(v);
-              if (v) {
-                await ref.read(indexProvider.notifier).autoIndex();
-              } else {
-                await ref.read(indexProvider.notifier).refresh();
-              }
-            },
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('人物分群'),
-            subtitle: Text(
-              facesOn
-                  ? '已處理 ${index.faceDone} / ${index.faceTotal} 張相片。'
-                        '結果在「相簿 › 人物」，命名後可直接搜尋名字'
-                  : '辨識相片中的人臉並依人物分組；會增加索引時間',
-            ),
-            value: facesOn,
-            onChanged: (v) async {
-              await ref.read(facesEnabledProvider.notifier).set(v);
-              if (v) {
-                await ref.read(indexProvider.notifier).autoIndex();
-              } else {
-                await ref.read(indexProvider.notifier).refresh();
-              }
-            },
-          ),
-          const Divider(height: 32),
-          Text('權限', style: titleStyle),
-          const SizedBox(height: 8),
-          Text(switch (perm) {
-            PermissionState.authorized => '已授權存取全部相片',
-            PermissionState.limited => '僅授權部分相片（只會索引可存取的項目）',
-            _ => '未授權',
-          }),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
+          SectionCard(
+            icon: Icons.manage_search,
+            title: '索引',
             children: [
-              if (perm == PermissionState.limited)
-                OutlinedButton(
-                  onPressed: ref
-                      .read(permissionProvider.notifier)
-                      .manageLimited,
-                  child: const Text('調整可存取的相片'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    progress == null
+                        ? '—'
+                        : '${(progress * 100).toStringAsFixed(0)}%',
+                    style: theme.textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      '${index.done} / ${index.total}'
+                      '${index.failed > 0 ? '（${index.failed} 個無法處理）' : ''}',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              LinearProgressIndicator(value: progress),
+              const SizedBox(height: 10),
+              Text(
+                index.msPerItem == null
+                    ? status
+                    : '$status（平均每個項目 ${index.msPerItem} 毫秒）',
+                style: small,
+              ),
+              if (model.error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(model.error!, style: errorStyle),
                 ),
-              const OutlinedButton(
-                onPressed: PhotoManager.openSetting,
-                child: Text('開啟系統設定'),
+              if (index.syncError != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text('讀取媒體庫失敗：${index.syncError}', style: errorStyle),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SectionCard(
+            icon: Icons.auto_awesome,
+            title: '智慧功能',
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('文字辨識（OCR）'),
+                subtitle: Text(
+                  ocrOn
+                      ? '已處理 ${index.ocrDone} / ${index.ocrTotal} 張。'
+                            '搜尋時用引號指定文字，例如：「發票」'
+                      : '可搜尋截圖、收據上的文字；會增加索引時間',
+                ),
+                value: ocrOn,
+                onChanged: (v) async {
+                  await ref.read(ocrEnabledProvider.notifier).set(v);
+                  if (v) {
+                    await ref.read(indexProvider.notifier).autoIndex();
+                  } else {
+                    await ref.read(indexProvider.notifier).refresh();
+                  }
+                },
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('人物分群'),
+                subtitle: Text(
+                  facesOn
+                      ? '已處理 ${index.faceDone} / ${index.faceTotal} 張。'
+                            '結果在「相簿 › 人物」，命名後可直接搜尋名字'
+                      : '辨識相片中的人臉並依人物分組；會增加索引時間',
+                ),
+                value: facesOn,
+                onChanged: (v) async {
+                  await ref.read(facesEnabledProvider.notifier).set(v);
+                  if (v) {
+                    await ref.read(indexProvider.notifier).autoIndex();
+                  } else {
+                    await ref.read(indexProvider.notifier).refresh();
+                  }
+                },
               ),
             ],
           ),
-          const SizedBox(height: 24),
-          Text('相片與搜尋內容只在這台裝置上處理，不會上傳。', style: small),
+          const SizedBox(height: 12),
+          SectionCard(
+            icon: Icons.lock_outline,
+            title: '權限與隱私',
+            children: [
+              Text(switch (perm) {
+                PermissionState.authorized => '已授權存取全部相片',
+                PermissionState.limited => '僅授權部分相片（只會索引可存取的項目）',
+                _ => '未授權',
+              }),
+              const SizedBox(height: 4),
+              Text('相片與搜尋內容只在這台裝置上處理，不會上傳。', style: small),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (perm == PermissionState.limited)
+                    OutlinedButton(
+                      onPressed: ref
+                          .read(permissionProvider.notifier)
+                          .manageLimited,
+                      child: const Text('調整可存取的相片'),
+                    ),
+                  const OutlinedButton(
+                    onPressed: PhotoManager.openSetting,
+                    child: Text('開啟系統設定'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ],
       ),
     );

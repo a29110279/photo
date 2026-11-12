@@ -480,6 +480,12 @@ class SearchController extends Notifier<SearchUiState> {
 
   void clearSelection() => state = state.copyWith(selected: {});
 
+  /// 清除搜尋結果，回到尚未搜尋的畫面。
+  void clear() => state = SearchUiState(
+    threshold: state.threshold,
+    imageThreshold: state.imageThreshold,
+  );
+
   /// 反選：先全選再點掉不要的（排除），或反過來。
   void invertSelection() => state = state.copyWith(
     selected: {

@@ -95,4 +95,28 @@ void main() {
     expect(q.place?.name, '東京');
     expect(q.kind, MediaKind.video);
   });
+
+  test('移除單一條件後組回提示詞，重新解析得到其餘條件', () {
+    final q = parser.parse('去年在日本拍的海邊影片「發票」');
+    expect(q.toPrompt(), '去年 日本 海邊 影片 「發票」');
+
+    final noPlace = parser.parse(q.without(QueryPart.place).toPrompt());
+    expect(noPlace.place, isNull);
+    expect(noPlace.from, DateTime(2025));
+    expect(noPlace.kind, MediaKind.video);
+    expect(noPlace.semantic, '海邊');
+    expect(noPlace.textTerms, ['發票']);
+
+    final noDate = parser.parse(q.without(QueryPart.date).toPrompt());
+    expect(noDate.from, isNull);
+    expect(noDate.place?.name, '日本');
+
+    final noText = q.without(QueryPart.text, term: '發票');
+    expect(noText.textTerms, isEmpty);
+    expect(
+      parser.parse(q.without(QueryPart.semantic).toPrompt()).semantic,
+      isEmpty,
+    );
+    expect(parser.parse('冬天的雪景').without(QueryPart.semantic).toPrompt(), '冬天');
+  });
 }

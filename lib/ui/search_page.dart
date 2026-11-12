@@ -6,6 +6,7 @@ import '../services/query_parser.dart';
 import '../services/search_service.dart';
 import '../state/providers.dart';
 import 'asset_widgets.dart';
+import 'theme.dart';
 
 class SearchPage extends ConsumerStatefulWidget {
   const SearchPage({super.key});
@@ -26,6 +27,23 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   void _submit() {
     FocusScope.of(context).unfocus();
     ref.read(searchProvider.notifier).search(_text.text);
+  }
+
+  /// 條件標籤上的 X：移除該條件，組回提示詞並重新搜尋。
+  void _removeCondition(QueryPart? part, {String? term}) {
+    final ctrl = ref.read(searchProvider.notifier);
+    final result = ref.read(searchProvider).result;
+    if (result == null) return;
+    // 以圖搜圖或已修正的結果：回到一般搜尋（或清空）。
+    final next = part == null || result.byImage
+        ? (result.byImage ? '' : result.query.toPrompt())
+        : result.query.without(part, term: term).toPrompt();
+    setState(() => _text.text = next);
+    if (next.trim().isEmpty) {
+      ctrl.clear();
+    } else {
+      ctrl.search(next);
+    }
   }
 
   @override
@@ -53,148 +71,180 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     });
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('提示詞搜尋'),
-        actions: [
-          if (result != null && !result.byImage && result.query.raw.isNotEmpty)
-            IconButton(
-              tooltip: '存成智慧相簿',
-              icon: const Icon(Icons.auto_awesome_motion_outlined),
-              onPressed: () =>
-                  _saveSmartAlbum(result.query.raw, s.activeThreshold),
-            ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-            child: TextField(
-              controller: _text,
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _submit(),
-              decoration: InputDecoration(
-                hintText: '例如：去年在日本拍的海邊影片',
-                border: const OutlineInputBorder(),
-                isDense: true,
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.search),
-                  onPressed: _submit,
-                ),
-              ),
-            ),
-          ),
-          if (model.progress != null)
-            const _Banner('首次啟動：正在準備語意模型，約需數十秒…')
-          else if (!model.ready && !model.loading)
-            const _Banner('此安裝檔未內建語意模型：目前只能用日期、地點、類型篩選。'),
-          if (index.syncing)
-            const _Banner('正在讀取媒體庫…完成後會自動更新搜尋結果。')
-          else if (index.total == 0)
-            _Banner(
-              index.syncError == null
-                  ? '沒有讀取到任何相片或影片。請到「設定」確認權限，或按「重新讀取媒體庫」。'
-                  : '讀取媒體庫失敗：${index.syncError}',
-            ),
-          if (model.ready && index.pending > 0)
-            _Banner('尚有 ${index.pending} 個項目未索引，語意搜尋結果可能不完整。'),
-          if (result != null) _QueryChips(result),
-          if (result != null && result.isSemantic)
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.fromLTRB(20, 12, 8, 4),
               child: Row(
                 children: [
-                  const Text('相關度'),
-                  Expanded(
-                    child: Slider(
-                      value: s.activeThreshold.clamp(
-                        0.0,
-                        result.byImage ? 1.0 : 0.5,
-                      ),
-                      max: result.byImage ? 1.0 : 0.5,
-                      divisions: 50,
-                      label: s.activeThreshold.toStringAsFixed(2),
-                      onChanged: ctrl.setThreshold,
-                      onChangeEnd: (_) => ctrl.saveThreshold(),
-                    ),
-                  ),
-                  Text(s.activeThreshold.toStringAsFixed(2)),
-                ],
-              ),
-            ),
-          if (result != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Row(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: Text(
-                      '${visible.length} 個結果・已選 ${s.selected.length}',
-                    ),
+                  Text(
+                    '理理相簿',
+                    style: Theme.of(context).appBarTheme.titleTextStyle,
                   ),
                   const Spacer(),
-                  TextButton(
-                    onPressed: ctrl.selectAll,
-                    child: const Text('全選'),
-                  ),
-                  TextButton(
-                    onPressed: ctrl.invertSelection,
-                    child: const Text('反選'),
-                  ),
-                  TextButton(
-                    onPressed: ctrl.clearSelection,
-                    child: const Text('清除'),
-                  ),
-                  if (result.isSemantic)
-                    IconButton(
-                      tooltip: '依選取修正結果：選取的視為相關，排在前面但沒選的視為不相關',
-                      icon: const Icon(Icons.tune),
-                      onPressed: s.selected.isEmpty ? null : ctrl.refine,
+                  if (result != null &&
+                      !result.byImage &&
+                      result.query.raw.isNotEmpty)
+                    IconButton.filledTonal(
+                      tooltip: '存成智慧相簿',
+                      icon: const Icon(Icons.auto_awesome_motion_outlined),
+                      onPressed: () =>
+                          _saveSmartAlbum(result.query.raw, s.activeThreshold),
                     ),
                 ],
               ),
             ),
-          Expanded(
-            child: s.busy
-                ? const Center(child: CircularProgressIndicator())
-                : result == null
-                ? const _Hint()
-                : visible.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        result.isSemantic
-                            ? '沒有符合的項目，可試著調低相關度'
-                            : '沒有符合條件的項目\n'
-                                  '（媒體庫共 ${index.photos} 張相片、${index.videos} 部影片）',
-                        textAlign: TextAlign.center,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: SearchBar(
+                controller: _text,
+                hintText: '描述想找的相片，例如：去年日本的海邊',
+                leading: const Icon(Icons.search),
+                trailing: [
+                  if (_text.text.isNotEmpty)
+                    IconButton(
+                      tooltip: '清除',
+                      icon: const Icon(Icons.close),
+                      onPressed: () {
+                        _text.clear();
+                        ctrl.clear();
+                        setState(() {});
+                      },
+                    ),
+                ],
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (_) => _submit(),
+                textInputAction: TextInputAction.search,
+              ),
+            ),
+            if (model.progress != null)
+              const InfoBanner('首次啟動：正在準備語意模型，約需數十秒…', icon: Icons.downloading)
+            else if (!model.ready && !model.loading)
+              const InfoBanner('此安裝檔未內建語意模型：目前只能用日期、地點、類型篩選。'),
+            if (index.syncing)
+              const InfoBanner('正在讀取媒體庫…完成後會自動更新搜尋結果。', icon: Icons.sync)
+            else if (index.total == 0)
+              InfoBanner(
+                index.syncError == null
+                    ? '沒有讀取到任何相片或影片，請到「設定」確認權限。'
+                    : '讀取媒體庫失敗：${index.syncError}',
+                error: index.syncError != null,
+              ),
+            if (model.ready && index.pending > 0)
+              InfoBanner(
+                '尚有 ${index.pending} 個項目未索引，語意搜尋結果可能不完整。',
+                icon: Icons.hourglass_bottom,
+              ),
+            if (result != null) _QueryChips(result, onRemove: _removeCondition),
+            if (result != null && result.isSemantic)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 12, 0),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.tune,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    const Text('相關度'),
+                    Expanded(
+                      child: Slider(
+                        value: s.activeThreshold.clamp(
+                          0.0,
+                          result.byImage ? 1.0 : 0.5,
+                        ),
+                        max: result.byImage ? 1.0 : 0.5,
+                        divisions: 50,
+                        label: s.activeThreshold.toStringAsFixed(2),
+                        onChanged: ctrl.setThreshold,
+                        onChangeEnd: (_) => ctrl.saveThreshold(),
                       ),
                     ),
-                  )
-                : GridView.builder(
-                    padding: const EdgeInsets.all(2),
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                          maxCrossAxisExtent: 130,
-                          mainAxisSpacing: 2,
-                          crossAxisSpacing: 2,
-                        ),
-                    itemCount: visible.length,
-                    itemBuilder: (_, i) {
-                      final h = visible[i];
-                      return AssetTile(
-                        key: ValueKey(h.asset.id),
-                        assetId: h.asset.id,
-                        selected: s.selected.contains(h.asset.id),
-                        badge: h.score?.toStringAsFixed(2),
-                        onTap: () => ctrl.toggle(h.asset.id),
-                      );
-                    },
-                  ),
-          ),
-        ],
+                    SizedBox(
+                      width: 36,
+                      child: Text(s.activeThreshold.toStringAsFixed(2)),
+                    ),
+                  ],
+                ),
+              ),
+            if (result != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 8, 0),
+                child: Row(
+                  children: [
+                    Text(
+                      '${visible.length} 個結果'
+                      '${s.selected.isEmpty ? '' : '・已選 ${s.selected.length}'}',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const Spacer(),
+                    PopupMenuButton<String>(
+                      tooltip: '選取',
+                      icon: const Icon(Icons.checklist),
+                      onSelected: (v) => switch (v) {
+                        'all' => ctrl.selectAll(),
+                        'invert' => ctrl.invertSelection(),
+                        _ => ctrl.clearSelection(),
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'all', child: Text('全選')),
+                        PopupMenuItem(value: 'invert', child: Text('反選')),
+                        PopupMenuItem(value: 'clear', child: Text('清除選取')),
+                      ],
+                    ),
+                    if (result.isSemantic)
+                      IconButton(
+                        tooltip: '依選取修正結果：選取的視為相關，排在前面但沒選的視為不相關',
+                        icon: const Icon(Icons.auto_fix_high),
+                        onPressed: s.selected.isEmpty ? null : ctrl.refine,
+                      ),
+                  ],
+                ),
+              ),
+            Expanded(
+              child: s.busy
+                  ? const Center(child: CircularProgressIndicator())
+                  : result == null
+                  ? _Hint(
+                      onPick: (q) {
+                        _text.text = q;
+                        _submit();
+                      },
+                    )
+                  : visible.isEmpty
+                  ? _EmptyResult(
+                      result.isSemantic
+                          ? '沒有符合的項目，可試著調低相關度'
+                          : '沒有符合條件的項目\n'
+                                '媒體庫共 ${index.photos} 張相片、${index.videos} 部影片',
+                    )
+                  : GridView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 96),
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                            maxCrossAxisExtent: 128,
+                            mainAxisSpacing: 4,
+                            crossAxisSpacing: 4,
+                          ),
+                      itemCount: visible.length,
+                      itemBuilder: (_, i) {
+                        final h = visible[i];
+                        return AssetTile(
+                          key: ValueKey(h.asset.id),
+                          assetId: h.asset.id,
+                          selected: s.selected.contains(h.asset.id),
+                          badge: h.score?.toStringAsFixed(2),
+                          onTap: () => ctrl.toggle(h.asset.id),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
       floatingActionButton: s.selected.isEmpty
           ? null
@@ -305,89 +355,143 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   }
 }
 
-class _Banner extends StatelessWidget {
-  const _Banner(this.text);
+class _EmptyResult extends StatelessWidget {
+  const _EmptyResult(this.text);
   final String text;
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: scheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(text, style: TextStyle(color: scheme.onSecondaryContainer)),
-    );
-  }
-}
-
-class _Hint extends StatelessWidget {
-  const _Hint();
-
-  @override
-  Widget build(BuildContext context) => const Center(
+  Widget build(BuildContext context) => Center(
     child: Padding(
-      padding: EdgeInsets.all(24),
-      child: Text(
-        '輸入想找的內容，可包含時間、地點與類型。\n\n'
-        '・去年夏天的海邊\n・上個月在台北拍的影片\n・2023年5月 貓\n'
-        '・寫著「發票」的照片（需在設定開啟文字辨識）\n\n'
-        '長按縮圖可預覽，預覽頁右上角可「找相似」。',
-        textAlign: TextAlign.center,
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.image_search_outlined,
+            size: 56,
+            color: Theme.of(context).colorScheme.outline,
+          ),
+          const SizedBox(height: 12),
+          Text(text, textAlign: TextAlign.center),
+        ],
       ),
     ),
   );
 }
 
-/// 顯示提示詞被解析成哪些條件，讓使用者知道篩選依據。
+/// 尚未搜尋時的說明與範例（點一下直接搜尋）。
+class _Hint extends StatelessWidget {
+  const _Hint({required this.onPick});
+  final ValueChanged<String> onPick;
+
+  static const _examples = [
+    '去年夏天的海邊',
+    '上個月在台北拍的影片',
+    '2023年5月 貓',
+    '寫著「發票」的照片',
+    '夜景',
+    '生日蛋糕',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+      children: [
+        Text('試試看', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final e in _examples)
+              ActionChip(
+                avatar: const Icon(Icons.north_west, size: 16),
+                label: Text(e),
+                onPressed: () => onPick(e),
+              ),
+          ],
+        ),
+        const SizedBox(height: 24),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              '可以同時描述時間、地點、類型與內容，'
+              '用引號指定相片中的文字，或輸入已命名的人物。\n\n'
+              '點縮圖可選取，長按可預覽；預覽頁右上角可「找相似」。',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 提示詞解析出的條件；每個標籤都可按 X 移除。
 class _QueryChips extends StatelessWidget {
-  const _QueryChips(this.result);
+  const _QueryChips(this.result, {required this.onRemove});
   final SearchResult result;
+  final void Function(QueryPart? part, {String? term}) onRemove;
 
   @override
   Widget build(BuildContext context) {
     final q = result.query;
-    if (result.byImage) {
-      return _chipRow([
-        (Icons.image_search, '以圖搜圖'),
-        if (result.refined) (Icons.tune, '已依選取修正'),
-      ]);
-    }
-    return _chipRow([
-      if (q.dateLabel != null) (Icons.event, q.dateLabel!),
-      if (q.place != null) (Icons.place_outlined, q.place!.name),
-      if (q.kind != null)
-        (
-          q.kind == MediaKind.video
-              ? Icons.videocam_outlined
-              : Icons.photo_outlined,
-          q.kind == MediaKind.video ? '影片' : '相片',
-        ),
-      if (q.person != null) (Icons.person_outline, q.person!),
-      for (final t in q.textTerms) (Icons.text_fields, '文字「$t」'),
-      if (q.semantic.isNotEmpty) (Icons.auto_awesome_outlined, q.semantic),
-      if (result.refined) (Icons.tune, '已依選取修正'),
-    ]);
-  }
-
-  Widget _chipRow(List<(IconData, String)> chips) {
+    final chips = <(IconData, String, VoidCallback)>[
+      if (result.byImage) (Icons.image_search, '以圖搜圖', () => onRemove(null)),
+      if (!result.byImage) ...[
+        if (q.dateLabel != null)
+          (Icons.event, q.dateLabel!.trim(), () => onRemove(QueryPart.date)),
+        if (q.place != null)
+          (
+            Icons.place_outlined,
+            q.place!.name,
+            () => onRemove(QueryPart.place),
+          ),
+        if (q.kind != null)
+          (
+            q.kind == MediaKind.video
+                ? Icons.videocam_outlined
+                : Icons.photo_outlined,
+            q.kind == MediaKind.video ? '影片' : '相片',
+            () => onRemove(QueryPart.kind),
+          ),
+        if (q.person != null)
+          (Icons.person_outline, q.person!, () => onRemove(QueryPart.person)),
+        for (final t in q.textTerms)
+          (
+            Icons.text_fields,
+            '文字「$t」',
+            () => onRemove(QueryPart.text, term: t),
+          ),
+        if (q.semantic.isNotEmpty)
+          (
+            Icons.auto_awesome_outlined,
+            q.semantic,
+            () => onRemove(QueryPart.semantic),
+          ),
+      ],
+      if (result.refined) (Icons.auto_fix_high, '已依選取修正', () => onRemove(null)),
+    ];
     if (chips.isEmpty) return const SizedBox.shrink();
     return SizedBox(
-      height: 40,
+      height: 44,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         children: [
           for (final c in chips)
             Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: Chip(
-                avatar: Icon(c.$1, size: 16),
+              padding: const EdgeInsets.only(right: 8),
+              child: InputChip(
+                avatar: Icon(c.$1, size: 18),
                 label: Text(c.$2),
+                onDeleted: c.$3,
+                deleteButtonTooltipMessage: '移除此條件',
                 visualDensity: VisualDensity.compact,
               ),
             ),
