@@ -1,20 +1,36 @@
 import 'package:flutter/material.dart';
 
-/// 理理相簿的主題：取圖示的洋紅色為主色、漫畫網點的黃色為輔色，
+/// 理理相簿的主題：淡藍色調（主色天空藍、輔色淺水藍），
 /// 圓角卡片、膠囊形輸入框與標籤，扁平無陰影的現代 Material 3 風格。
 abstract final class AppTheme {
-  static const _seed = Color(0xFFE0307A);
-  static const _accent = Color(0xFFF6CD3C);
+  static const _seed = Color(0xFF6FB3E8);
+  static const _accent = Color(0xFFBFE3F7);
 
   static ThemeData light() => _build(Brightness.light);
   static ThemeData dark() => _build(Brightness.dark);
 
   static ThemeData _build(Brightness brightness) {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: _seed,
-      brightness: brightness,
-      dynamicSchemeVariant: DynamicSchemeVariant.vibrant,
-    ).copyWith(tertiary: _accent, onTertiary: Colors.black);
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: _seed,
+          brightness: brightness,
+          // tonalSpot：柔和、低彩度的配色，整體呈現淡藍色調。
+          dynamicSchemeVariant: DynamicSchemeVariant.tonalSpot,
+        ).copyWith(
+          tertiary: brightness == Brightness.light
+              ? _accent
+              : const Color(0xFF2E5F80),
+          onTertiary: brightness == Brightness.light
+              ? const Color(0xFF0D3550)
+              : Colors.white,
+          // 提示列等使用的輔色也統一為淡藍，避免出現其他色相。
+          tertiaryContainer: brightness == Brightness.light
+              ? const Color(0xFFE1F2FC)
+              : const Color(0xFF1E3A4F),
+          onTertiaryContainer: brightness == Brightness.light
+              ? const Color(0xFF0D3550)
+              : const Color(0xFFCDE8F8),
+        );
     final radius = BorderRadius.circular(20);
 
     return ThemeData(

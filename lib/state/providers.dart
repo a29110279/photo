@@ -480,6 +480,25 @@ class SearchController extends Notifier<SearchUiState> {
 
   void clearSelection() => state = state.copyWith(selected: {});
 
+  /// 已刪除的項目：從目前的結果與選取中移除。
+  void removeAssets(Set<String> ids) {
+    final r = state.result;
+    if (r == null) return;
+    state = state.copyWith(
+      result: SearchResult(
+        r.query,
+        [
+          for (final h in r.hits)
+            if (!ids.contains(h.asset.id)) h,
+        ],
+        queryVector: r.queryVector,
+        byImage: r.byImage,
+        refined: r.refined,
+      ),
+      selected: state.selected.difference(ids),
+    );
+  }
+
   /// 清除搜尋結果，回到尚未搜尋的畫面。
   void clear() => state = SearchUiState(
     threshold: state.threshold,

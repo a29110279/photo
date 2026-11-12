@@ -6,6 +6,7 @@ import '../services/query_parser.dart';
 import '../services/search_service.dart';
 import '../state/providers.dart';
 import 'asset_widgets.dart';
+import 'cleanup_page.dart' show confirmAndTrash;
 import 'theme.dart';
 
 class SearchPage extends ConsumerStatefulWidget {
@@ -246,14 +247,49 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           ],
         ),
       ),
-      floatingActionButton: s.selected.isEmpty
+      // 選取後顯示操作列：加入（搬移）相簿或刪除。
+      bottomNavigationBar: s.selected.isEmpty
           ? null
-          : FloatingActionButton.extended(
-              icon: const Icon(Icons.create_new_folder_outlined),
-              label: Text(AlbumService.movesFiles ? '搬移到相簿' : '加入相簿'),
-              onPressed: () => _addToAlbum(s.selected.toList()),
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Theme.of(context).colorScheme.error,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        icon: const Icon(Icons.delete_outline),
+                        label: Text('刪除 ${s.selected.length} 個'),
+                        onPressed: () => _delete(s.selected.toList()),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        icon: const Icon(Icons.create_new_folder_outlined),
+                        label: Text(AlbumService.movesFiles ? '搬移到相簿' : '加入相簿'),
+                        onPressed: () => _addToAlbum(s.selected.toList()),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
     );
+  }
+
+  /// 刪除選取的項目：移到系統垃圾桶／最近刪除（可復原），並從結果中移除。
+  Future<void> _delete(List<String> ids) async {
+    final gone = await confirmAndTrash(context, ref, ids);
+    if (gone == null || gone.isEmpty) return;
+    ref.read(searchProvider.notifier).removeAssets(gone);
+    ref.invalidate(albumsProvider);
   }
 
   /// 智慧相簿（O5）：保存目前的提示詞與門檻。
