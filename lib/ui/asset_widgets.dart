@@ -1,12 +1,14 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:video_player/video_player.dart';
 
 import '../state/providers.dart';
+import 'theme.dart';
 
 String formatDuration(int seconds) {
   final m = seconds ~/ 60, s = seconds % 60;
@@ -38,58 +40,76 @@ class AssetTile extends ConsumerWidget {
       MaterialPageRoute<void>(builder: (_) => ViewerPage(assetId: assetId)),
     );
 
+    final picked = selected == true;
     return GestureDetector(
       onTap: onTap ?? preview,
       onLongPress: preview,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (entity == null)
-              ColoredBox(color: scheme.surfaceContainerHighest)
-            else
-              Image(
-                image: AssetEntityImageProvider(
-                  entity,
-                  isOriginal: false,
-                  thumbnailSize: const ThumbnailSize.square(256),
+      // 右下留 4px 給選取時的實心陰影，格線間距因此一致。
+      child: Padding(
+        padding: const EdgeInsets.only(right: 4, bottom: 4),
+        child: Container(
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: [
+              if (picked)
+                const BoxShadow(
+                  color: AppColors.deepBlue,
+                  offset: Offset(4, 4),
                 ),
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => ColoredBox(
-                  color: scheme.surfaceContainerHighest,
-                  child: const Icon(Icons.broken_image_outlined),
+            ],
+          ),
+          foregroundDecoration: BoxDecoration(
+            border: Border.fromBorderSide(AppTheme.inkSide),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (entity != null)
+                Image(
+                  image: AssetEntityImageProvider(
+                    entity,
+                    isOriginal: false,
+                    thumbnailSize: const ThumbnailSize.square(256),
+                  ),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) =>
+                      const Icon(Icons.broken_image_outlined),
                 ),
-              ),
-            if (entity?.type == AssetType.video)
-              Positioned(
-                left: 4,
-                bottom: 4,
-                child: _Chip('▶ ${formatDuration(entity!.duration)}'),
-              ),
-            if (badge != null)
-              Positioned(right: 4, bottom: 4, child: _Chip(badge!)),
-            if (selected != null)
-              Positioned(
-                right: 4,
-                top: 4,
-                child: Icon(
-                  selected! ? Icons.check_circle : Icons.circle_outlined,
-                  color: selected! ? scheme.primary : Colors.white70,
-                  shadows: const [Shadow(blurRadius: 4)],
+              if (entity?.type == AssetType.video)
+                Positioned(
+                  left: 6,
+                  bottom: 6,
+                  child: _Chip('▶ ${formatDuration(entity!.duration)}'),
                 ),
-              ),
-            if (selected == true)
-              IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: scheme.primary, width: 3),
-                    borderRadius: BorderRadius.circular(10),
-                    color: scheme.primary.withValues(alpha: 0.15),
+              if (badge != null)
+                Positioned(right: 6, bottom: 6, child: _Chip(badge!)),
+              if (selected != null)
+                Positioned(
+                  right: 6,
+                  top: 6,
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: picked ? AppColors.yellow : Colors.white,
+                      shape: BoxShape.circle,
+                      border: Border.fromBorderSide(AppTheme.inkSide),
+                    ),
+                    child: picked
+                        ? const Icon(
+                            Icons.check,
+                            size: 16,
+                            color: AppColors.ink,
+                            weight: 900,
+                          )
+                        : null,
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -103,14 +123,18 @@ class _Chip extends StatelessWidget {
   @override
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
-      color: Colors.black54,
-      borderRadius: BorderRadius.circular(4),
+      color: AppColors.ink,
+      borderRadius: BorderRadius.circular(6),
     ),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
       child: Text(
         text,
-        style: const TextStyle(color: Colors.white, fontSize: 11),
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     ),
   );
@@ -129,11 +153,18 @@ class ViewerPage extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
+        shape: const Border(),
+        systemOverlayStyle: SystemUiOverlayStyle.light,
         title: Text(
           entity.value == null
               ? ''
               : entity.value!.createDateTime.toString().substring(0, 16),
-          style: const TextStyle(fontSize: 16),
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
+            letterSpacing: 0,
+          ),
         ),
         actions: [
           if (ref.watch(modelProvider).ready)

@@ -19,8 +19,9 @@ class PhotoPromptApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: '理理相簿',
+      // 固定淺色模式，不跟隨系統的深色設定。
       theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
+      themeMode: ThemeMode.light,
       debugShowCheckedModeBanner: false,
       home: const PermissionGate(),
     );
@@ -50,13 +51,18 @@ class PermissionGate extends ConsumerWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(36),
-                    child: Image.asset(
-                      'assets/branding/logo.png',
-                      width: 160,
-                      height: 160,
+                  Container(
+                    width: 160,
+                    height: 160,
+                    clipBehavior: Clip.antiAlias,
+                    foregroundDecoration: BoxDecoration(
+                      border: Border.fromBorderSide(AppTheme.inkSide),
+                      borderRadius: BorderRadius.circular(32),
                     ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(32),
+                    ),
+                    child: Image.asset('assets/branding/logo.png'),
                   ),
                   const SizedBox(height: 24),
                   Text(
@@ -164,24 +170,30 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           SettingsPage(),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: index,
-        onDestinationSelected: ref.read(homeTabProvider.notifier).go,
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.search), label: '搜尋'),
-          NavigationDestination(
-            icon: Icon(Icons.photo_album_outlined),
-            label: '相簿',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.cleaning_services_outlined),
-            label: '整理',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            label: '設定',
-          ),
-        ],
+      bottomNavigationBar: DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: AppColors.ink, width: 3)),
+        ),
+        child: NavigationBar(
+          selectedIndex: index,
+          onDestinationSelected: ref.read(homeTabProvider.notifier).go,
+          destinations: const [
+            NavigationDestination(icon: Icon(Icons.search), label: '搜尋'),
+            NavigationDestination(
+              icon: Icon(Icons.photo_album_outlined),
+              label: '相簿',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.cleaning_services_outlined),
+              label: '整理',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.settings_outlined),
+              label: '設定',
+            ),
+          ],
+        ),
       ),
     );
   }

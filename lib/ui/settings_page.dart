@@ -37,7 +37,7 @@ class SettingsPage extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('設定')),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+        padding: const EdgeInsets.fromLTRB(16, 18, 20, 32),
         children: [
           SectionCard(
             icon: Icons.manage_search,
@@ -50,8 +50,9 @@ class SettingsPage extends ConsumerWidget {
                     progress == null
                         ? '—'
                         : '${(progress * 100).toStringAsFixed(0)}%',
-                    style: theme.textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
+                    style: theme.textTheme.displaySmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                      height: 1,
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -65,7 +66,7 @@ class SettingsPage extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 10),
-              LinearProgressIndicator(value: progress),
+              ComicProgressBar(value: progress),
               const SizedBox(height: 10),
               Text(
                 index.msPerItem == null
@@ -90,7 +91,7 @@ class SettingsPage extends ConsumerWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 18),
           SectionCard(
             icon: Icons.auto_awesome,
             title: '智慧功能',
@@ -135,7 +136,7 @@ class SettingsPage extends ConsumerWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 18),
           SectionCard(
             icon: Icons.lock_outline,
             title: '權限與隱私',

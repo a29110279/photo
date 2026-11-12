@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<defs>
+<clipPath id="photo"><rect x="424" y="320" width="304" height="250" rx="20"/></clipPath>
+</defs>
+<rect width="1024" height="1024" fill="#F6CD3C"/>
+<g fill="#E3B21C">
+<circle cx="648" cy="24" r="3.6"/>
+<circle cx="648" cy="72" r="3.4"/>
+<circle cx="648" cy="120" r="3.1"/>
+<circle cx="648" cy="168" r="2.7"/>
+<circle cx="696" cy="24" r="4.8"/>
+<circle cx="696" cy="72" r="4.6"/>
+<circle cx="696" cy="120" r="4.3"/>
+<circle cx="696" cy="168" r="3.8"/>
+<circle cx="696" cy="216" r="3.2"/>
+<circle cx="744" cy="24" r="6.0"/>
+<circle cx="744" cy="72" r="5.8"/>
+<circle cx="744" cy="120" r="5.4"/>
+<circle cx="744" cy="168" r="4.8"/>
+<circle cx="744" cy="216" r="4.2"/>
+<circle cx="744" cy="264" r="3.4"/>
+<circle cx="744" cy="312" r="2.5"/>
+<circle cx="792" cy="24" r="7.2"/>
+<circle cx="792" cy="72" r="6.9"/>
+<circle cx="792" cy="120" r="6.5"/>
+<circle cx="792" cy="168" r="5.8"/>
+<circle cx="792" cy="216" r="5.1"/>
+<circle cx="792" cy="264" r="4.2"/>
+<circle cx="792" cy="312" r="3.3"/>
+<circle cx="840" cy="24" r="8.4"/>
+<circle cx="840" cy="72" r="8.1"/>
+<circle cx="840" cy="120" r="7.5"/>
+<circle cx="840" cy="168" r="6.8"/>
+<circle cx="840" cy="216" r="5.9"/>
+<circle cx="840" cy="264" r="5.0"/>
+<circle cx="840" cy="312" r="3.9"/>
+<circle cx="840" cy="360" r="2.9"/>
+<circle cx="888" cy="24" r="9.5"/>
+<circle cx="888" cy="72" r="9.2"/>
+<circle cx="888" cy="120" r="8.5"/>
+<circle cx="888" cy="168" r="7.6"/>
+<circle cx="888" cy="216" r="6.6"/>
+<circle cx="888" cy="264" r="5.6"/>
+<circle cx="888" cy="312" r="4.5"/>
+<circle cx="888" cy="360" r="3.4"/>
+<circle cx="936" cy="24" r="10.7"/>
+<circle cx="936" cy="72" r="10.2"/>
+<circle cx="936" cy="120" r="9.3"/>
+<circle cx="936" cy="168" r="8.3"/>
+<circle cx="936" cy="216" r="7.2"/>
+<circle cx="936" cy="264" r="6.0"/>
+<circle cx="936" cy="312" r="4.9"/>
+<circle cx="936" cy="360" r="3.7"/>
+<circle cx="936" cy="408" r="2.6"/>
+<circle cx="984" cy="24" r="11.8"/>
+<circle cx="984" cy="72" r="10.9"/>
+<circle cx="984" cy="120" r="9.8"/>
+<circle cx="984" cy="168" r="8.7"/>
+<circle cx="984" cy="216" r="7.5"/>
+<circle cx="984" cy="264" r="6.3"/>
+<circle cx="984" cy="312" r="5.1"/>
+<circle cx="984" cy="360" r="3.9"/>
+<circle cx="984" cy="408" r="2.8"/>
+<circle cx="24" cy="696" r="3.3"/>
+<circle cx="24" cy="744" r="4.7"/>
+<circle cx="24" cy="792" r="6.1"/>
+<circle cx="24" cy="840" r="7.5"/>
+<circle cx="24" cy="888" r="8.9"/>
+<circle cx="24" cy="936" r="10.3"/>
+<circle cx="24" cy="984" r="11.6"/>
+<circle cx="72" cy="696" r="3.1"/>
+<circle cx="72" cy="744" r="4.5"/>
+<circle cx="72" cy="792" r="5.8"/>
+<circle cx="72" cy="840" r="7.2"/>
+<circle cx="72" cy="888" r="8.5"/>
+<circle cx="72" cy="936" r="9.6"/>
+<circle cx="72" cy="984" r="10.6"/>
+<circle cx="120" cy="696" r="2.7"/>
+<circle cx="120" cy="744" r="4.0"/>
+<circle cx="120" cy="792" r="5.3"/>
+<circle cx="120" cy="840" r="6.5"/>
+<circle cx="120" cy="888" r="7.6"/>
+<circle cx="120" cy="936" r="8.6"/>
+<circle cx="120" cy="984" r="9.3"/>
+<circle cx="168" cy="744" r="3.4"/>
+<circle cx="168" cy="792" r="4.5"/>
+<circle cx="168" cy="840" r="5.6"/>
+<circle cx="168" cy="888" r="6.6"/>
+<circle cx="168" cy="936" r="7.4"/>
+<circle cx="168" cy="984" r="7.9"/>
+<circle cx="216" cy="744" r="2.6"/>
+<circle cx="216" cy="792" r="3.6"/>
+<circle cx="216" cy="840" r="4.6"/>
+<circle cx="216" cy="888" r="5.5"/>
+<circle cx="216" cy="936" r="6.1"/>
+<circle cx="216" cy="984" r="6.5"/>
+<circle cx="264" cy="792" r="2.6"/>
+<circle cx="264" cy="840" r="3.5"/>
+<circle cx="264" cy="888" r="4.2"/>
+<circle cx="264" cy="936" r="4.8"/>
+<circle cx="264" cy="984" r="5.1"/>
+<circle cx="312" cy="888" r="2.9"/>
+<circle cx="312" cy="936" r="3.4"/>
+<circle cx="312" cy="984" r="3.7"/>
+</g>
+<rect x="296" y="266" width="520" height="560" rx="48" fill="#15171A"/>
+<rect x="260" y="230" width="520" height="560" rx="48" fill="#FFFFFF" stroke="#15171A" stroke-width="28"/>
+<path d="M308 230H372V790H308a48 48 0 0 1-48-48V278a48 48 0 0 1 48-48z" fill="#6FB3E8" stroke="#15171A" stroke-width="28" stroke-linejoin="round"/>
+<circle cx="316" cy="400" r="16" fill="#15171A"/>
+<circle cx="316" cy="620" r="16" fill="#15171A"/>
+<rect x="424" y="320" width="304" height="250" rx="20" fill="#BFE3F7"/>
+<g clip-path="url(#photo)">
+<circle cx="660" cy="388" r="30" fill="#F6CD3C" stroke="#15171A" stroke-width="18"/>
+<path d="M404 590L512 440L580 520L624 476L748 590Z" fill="#FFFFFF" stroke="#15171A" stroke-width="20" stroke-linejoin="round"/>
+</g>
+<rect x="424" y="320" width="304" height="250" rx="20" fill="none" stroke="#15171A" stroke-width="24"/>
+<path d="M424 650H728M424 714H610" fill="none" stroke="#15171A" stroke-width="24" stroke-linecap="round"/>
+</svg>

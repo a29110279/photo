@@ -72,187 +72,203 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     });
 
     return Scaffold(
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ComicHeader(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: SizedBox(
+                    height: 44,
+                    child: Row(
+                      children: [
+                        Text(
+                          '理理相簿',
+                          style: Theme.of(context).appBarTheme.titleTextStyle,
+                        ),
+                        const Spacer(),
+                        if (result != null &&
+                            !result.byImage &&
+                            result.query.raw.isNotEmpty)
+                          IconButton(
+                            tooltip: '存成智慧相簿',
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.white,
+                              foregroundColor: AppColors.ink,
+                              shape: const ComicBorder(shadow: 3),
+                            ),
+                            icon: const Icon(
+                              Icons.auto_awesome_motion_outlined,
+                            ),
+                            onPressed: () => _saveSmartAlbum(
+                              result.query.raw,
+                              s.activeThreshold,
+                            ),
+                          ),
+                        const SizedBox(width: 3),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 20, 18),
+                  child: SearchBar(
+                    controller: _text,
+                    hintText: '描述想找的相片，例如：去年日本的海邊',
+                    leading: const Icon(Icons.search),
+                    trailing: [
+                      if (_text.text.isNotEmpty)
+                        IconButton(
+                          tooltip: '清除',
+                          icon: const Icon(Icons.close),
+                          onPressed: () {
+                            _text.clear();
+                            ctrl.clear();
+                            setState(() {});
+                          },
+                        ),
+                    ],
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: (_) => _submit(),
+                    textInputAction: TextInputAction.search,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (model.progress != null)
+            const InfoBanner('首次啟動：正在準備語意模型，約需數十秒…', icon: Icons.downloading)
+          else if (!model.ready && !model.loading)
+            const InfoBanner('此安裝檔未內建語意模型：目前只能用日期、地點、類型篩選。'),
+          if (index.syncing)
+            const InfoBanner('正在讀取媒體庫…完成後會自動更新搜尋結果。', icon: Icons.sync)
+          else if (index.total == 0)
+            InfoBanner(
+              index.syncError == null
+                  ? '沒有讀取到任何相片或影片，請到「設定」確認權限。'
+                  : '讀取媒體庫失敗：${index.syncError}',
+              error: index.syncError != null,
+            ),
+          if (model.ready && index.pending > 0)
+            InfoBanner(
+              '尚有 ${index.pending} 個項目未索引，語意搜尋結果可能不完整。',
+              icon: Icons.hourglass_bottom,
+            ),
+          if (result != null) _QueryChips(result, onRemove: _removeCondition),
+          if (result != null && result.isSemantic)
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 8, 4),
+              padding: const EdgeInsets.fromLTRB(20, 0, 12, 0),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.tune,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  const Text('相關度'),
+                  Expanded(
+                    child: Slider(
+                      value: s.activeThreshold.clamp(
+                        0.0,
+                        result.byImage ? 1.0 : 0.5,
+                      ),
+                      max: result.byImage ? 1.0 : 0.5,
+                      divisions: 50,
+                      label: s.activeThreshold.toStringAsFixed(2),
+                      onChanged: ctrl.setThreshold,
+                      onChangeEnd: (_) => ctrl.saveThreshold(),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 36,
+                    child: Text(s.activeThreshold.toStringAsFixed(2)),
+                  ),
+                ],
+              ),
+            ),
+          if (result != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 8, 0),
               child: Row(
                 children: [
                   Text(
-                    '理理相簿',
-                    style: Theme.of(context).appBarTheme.titleTextStyle,
+                    '${visible.length} 個結果'
+                    '${s.selected.isEmpty ? '' : '・已選 ${s.selected.length}'}',
+                    style: Theme.of(context).textTheme.labelLarge,
                   ),
                   const Spacer(),
-                  if (result != null &&
-                      !result.byImage &&
-                      result.query.raw.isNotEmpty)
-                    IconButton.filledTonal(
-                      tooltip: '存成智慧相簿',
-                      icon: const Icon(Icons.auto_awesome_motion_outlined),
-                      onPressed: () =>
-                          _saveSmartAlbum(result.query.raw, s.activeThreshold),
-                    ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-              child: SearchBar(
-                controller: _text,
-                hintText: '描述想找的相片，例如：去年日本的海邊',
-                leading: const Icon(Icons.search),
-                trailing: [
-                  if (_text.text.isNotEmpty)
+                  PopupMenuButton<String>(
+                    tooltip: '選取',
+                    icon: const Icon(Icons.checklist),
+                    onSelected: (v) => switch (v) {
+                      'all' => ctrl.selectAll(),
+                      'invert' => ctrl.invertSelection(),
+                      _ => ctrl.clearSelection(),
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'all', child: Text('全選')),
+                      PopupMenuItem(value: 'invert', child: Text('反選')),
+                      PopupMenuItem(value: 'clear', child: Text('清除選取')),
+                    ],
+                  ),
+                  if (result.isSemantic)
                     IconButton(
-                      tooltip: '清除',
-                      icon: const Icon(Icons.close),
-                      onPressed: () {
-                        _text.clear();
-                        ctrl.clear();
-                        setState(() {});
-                      },
+                      tooltip: '依選取修正結果：選取的視為相關，排在前面但沒選的視為不相關',
+                      icon: const Icon(Icons.auto_fix_high),
+                      onPressed: s.selected.isEmpty ? null : ctrl.refine,
                     ),
                 ],
-                onChanged: (_) => setState(() {}),
-                onSubmitted: (_) => _submit(),
-                textInputAction: TextInputAction.search,
               ),
             ),
-            if (model.progress != null)
-              const InfoBanner('首次啟動：正在準備語意模型，約需數十秒…', icon: Icons.downloading)
-            else if (!model.ready && !model.loading)
-              const InfoBanner('此安裝檔未內建語意模型：目前只能用日期、地點、類型篩選。'),
-            if (index.syncing)
-              const InfoBanner('正在讀取媒體庫…完成後會自動更新搜尋結果。', icon: Icons.sync)
-            else if (index.total == 0)
-              InfoBanner(
-                index.syncError == null
-                    ? '沒有讀取到任何相片或影片，請到「設定」確認權限。'
-                    : '讀取媒體庫失敗：${index.syncError}',
-                error: index.syncError != null,
-              ),
-            if (model.ready && index.pending > 0)
-              InfoBanner(
-                '尚有 ${index.pending} 個項目未索引，語意搜尋結果可能不完整。',
-                icon: Icons.hourglass_bottom,
-              ),
-            if (result != null) _QueryChips(result, onRemove: _removeCondition),
-            if (result != null && result.isSemantic)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 12, 0),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.tune,
-                      size: 18,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 6),
-                    const Text('相關度'),
-                    Expanded(
-                      child: Slider(
-                        value: s.activeThreshold.clamp(
-                          0.0,
-                          result.byImage ? 1.0 : 0.5,
+          Expanded(
+            child: s.busy
+                ? const Center(child: CircularProgressIndicator())
+                : result == null
+                ? _Hint(
+                    onPick: (q) {
+                      _text.text = q;
+                      _submit();
+                    },
+                  )
+                : visible.isEmpty
+                ? _EmptyResult(
+                    result.isSemantic
+                        ? '沒有符合的項目，可試著調低相關度'
+                        : '沒有符合條件的項目\n'
+                              '媒體庫共 ${index.photos} 張相片、${index.videos} 部影片',
+                  )
+                : GridView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 12, 96),
+                    gridDelegate:
+                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                          maxCrossAxisExtent: 128,
+                          mainAxisSpacing: 6,
+                          crossAxisSpacing: 6,
                         ),
-                        max: result.byImage ? 1.0 : 0.5,
-                        divisions: 50,
-                        label: s.activeThreshold.toStringAsFixed(2),
-                        onChanged: ctrl.setThreshold,
-                        onChangeEnd: (_) => ctrl.saveThreshold(),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 36,
-                      child: Text(s.activeThreshold.toStringAsFixed(2)),
-                    ),
-                  ],
-                ),
-              ),
-            if (result != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 8, 0),
-                child: Row(
-                  children: [
-                    Text(
-                      '${visible.length} 個結果'
-                      '${s.selected.isEmpty ? '' : '・已選 ${s.selected.length}'}',
-                      style: Theme.of(context).textTheme.labelLarge,
-                    ),
-                    const Spacer(),
-                    PopupMenuButton<String>(
-                      tooltip: '選取',
-                      icon: const Icon(Icons.checklist),
-                      onSelected: (v) => switch (v) {
-                        'all' => ctrl.selectAll(),
-                        'invert' => ctrl.invertSelection(),
-                        _ => ctrl.clearSelection(),
-                      },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'all', child: Text('全選')),
-                        PopupMenuItem(value: 'invert', child: Text('反選')),
-                        PopupMenuItem(value: 'clear', child: Text('清除選取')),
-                      ],
-                    ),
-                    if (result.isSemantic)
-                      IconButton(
-                        tooltip: '依選取修正結果：選取的視為相關，排在前面但沒選的視為不相關',
-                        icon: const Icon(Icons.auto_fix_high),
-                        onPressed: s.selected.isEmpty ? null : ctrl.refine,
-                      ),
-                  ],
-                ),
-              ),
-            Expanded(
-              child: s.busy
-                  ? const Center(child: CircularProgressIndicator())
-                  : result == null
-                  ? _Hint(
-                      onPick: (q) {
-                        _text.text = q;
-                        _submit();
-                      },
-                    )
-                  : visible.isEmpty
-                  ? _EmptyResult(
-                      result.isSemantic
-                          ? '沒有符合的項目，可試著調低相關度'
-                          : '沒有符合條件的項目\n'
-                                '媒體庫共 ${index.photos} 張相片、${index.videos} 部影片',
-                    )
-                  : GridView.builder(
-                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 96),
-                      gridDelegate:
-                          const SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: 128,
-                            mainAxisSpacing: 4,
-                            crossAxisSpacing: 4,
-                          ),
-                      itemCount: visible.length,
-                      itemBuilder: (_, i) {
-                        final h = visible[i];
-                        return AssetTile(
-                          key: ValueKey(h.asset.id),
-                          assetId: h.asset.id,
-                          selected: s.selected.contains(h.asset.id),
-                          badge: h.score?.toStringAsFixed(2),
-                          onTap: () => ctrl.toggle(h.asset.id),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
+                    itemCount: visible.length,
+                    itemBuilder: (_, i) {
+                      final h = visible[i];
+                      return AssetTile(
+                        key: ValueKey(h.asset.id),
+                        assetId: h.asset.id,
+                        selected: s.selected.contains(h.asset.id),
+                        badge: h.score?.toStringAsFixed(2),
+                        onTap: () => ctrl.toggle(h.asset.id),
+                      );
+                    },
+                  ),
+          ),
+        ],
       ),
       // 選取後顯示操作列：加入（搬移）相簿或刪除。
       bottomNavigationBar: s.selected.isEmpty
           ? null
           : SafeArea(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                padding: const EdgeInsets.fromLTRB(16, 8, 20, 16),
                 child: Row(
                   children: [
                     Expanded(
@@ -266,7 +282,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                         onPressed: () => _delete(s.selected.toList()),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 14),
                     Expanded(
                       child: FilledButton.icon(
                         style: FilledButton.styleFrom(
