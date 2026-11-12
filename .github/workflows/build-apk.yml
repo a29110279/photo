@@ -1,4 +1,5 @@
-# 在 GitHub 上建置 Android APK（arm64，內建語意模型），完成後於該次執行的 Artifacts 下載。
+# 在 GitHub 上建置 Android APK（arm64，內建語意模型），完成後自動發佈到 GitHub Releases，
+# 也可在該次執行的 Artifacts 下載（需登入）。
 # 模型取自最近一次成功的 Export model workflow 產物。
 #
 # 選用設定（Settings › Secrets and variables › Actions）：
@@ -19,7 +20,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # 發佈 Release 需要寫入權限。
+  contents: write
   actions: read
 
 jobs:
@@ -105,3 +107,32 @@ jobs:
           name: photo-prompt-apk-${{ github.run_number }}
           path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 30
+
+      # 發佈到 GitHub Releases：APK 可直接下載，不需登入也不用解壓縮。
+      # 注意：儲存庫是公開的，發佈出去的 APK 任何人都能下載。
+      - name: Publish to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 同一個 commit 也重新匯出了模型時，由模型匯出後觸發的那次建置負責發佈，避免重複。
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            exports=$(gh run list -R "$GITHUB_REPOSITORY" --workflow export-model.yml \
+              --commit "$GITHUB_SHA" --json databaseId -q 'length')
+            if [ "$exports" != "0" ]; then
+              echo "此 commit 另有 Export model 觸發的建置，略過發佈。"
+              exit 0
+            fi
+          fi
+          tag="apk-${GITHUB_RUN_NUMBER}"
+          # 固定檔名：releases/latest/download/photo-prompt.apk 永遠指向最新版。
+          cp build/app/outputs/flutter-apk/app-release.apk photo-prompt.apk
+          gh release create "$tag" photo-prompt.apk -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --latest \
+            --title "理理相簿 build ${GITHUB_RUN_NUMBER}" \
+            --notes "$(git log -1 --format='%h %s')"
+          # 只保留最近 5 個自動發佈的版本（僅處理 apk- 開頭的標籤）。
+          gh release list -R "$GITHUB_REPOSITORY" --limit 100 --json tagName,createdAt \
+            -q '[.[] | select(.tagName | startswith("apk-"))] | sort_by(.createdAt) | reverse | .[5:][].tagName' \
+            | while read -r old; do
+                gh release delete "$old" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag
+              done

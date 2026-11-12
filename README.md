@@ -89,7 +89,7 @@ python tools/verify_model.py --model-dir dist/model
 
 ### 3. 建置與安裝
 
-GitHub Actions 的 **Build APK** 會產出內建模型的 arm64 APK（Artifacts 內的 `app-release.apk`）。
+GitHub Actions 的 **Build APK** 會產出內建模型的 arm64 APK，並自動發佈到 GitHub Releases（`photo-prompt.apk`，保留最近 5 版；也可在該次執行的 Artifacts 下載，需登入）。
 首次開啟時會花數十秒把模型從 APK 解出，之後直接使用。
 
 本機建置時，把模型的 4 個檔案（`image`、`text`、`vocab`、`manifest.json`）放到 `assets/model/`（不進版本控制），再執行：
