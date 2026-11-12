@@ -22,7 +22,7 @@ from pathlib import Path
 import torch
 from transformers import ChineseCLIPModel, ChineseCLIPProcessor
 
-from model_check import Reference
+from model_check import Reference, encode_image
 
 CONTEXT_LENGTH = 52
 
@@ -33,8 +33,8 @@ class ImageEncoder(torch.nn.Module):
         self.model = model
 
     def forward(self, image):
-        out = self.model.get_image_features(pixel_values=image)
-        return out if isinstance(out, torch.Tensor) else out.pooler_output
+        # 輸入解析度低於原生的 224 時，位置編碼會在匯出時內插並固定在模型內。
+        return encode_image(self.model, image)
 
 
 class TextEncoder(torch.nn.Module):
@@ -82,6 +82,9 @@ def main():
     ap.add_argument("--out", type=Path, default=Path("dist/model"))
     ap.add_argument("--quantize", action="store_true", help="嘗試 int8 量化，自動挑選通過門檻者")
     ap.add_argument("--min-cos", type=float, default=0.97, help="量化版與原始模型的最低 cosine 門檻")
+    ap.add_argument("--image-size", type=int,
+                    help="影像輸入解析度（預設為模型原生的 224）。需為 16 的倍數；"
+                         "較小的解析度推論較快、準確度較低")
     ap.add_argument("--version", help="模型版本字串（預設由模型名稱產生）")
     args = ap.parse_args()
     QUANT_CANDIDATES.extend(_quant_candidates() if args.quantize else [])
@@ -90,11 +93,14 @@ def main():
     model = ChineseCLIPModel.from_pretrained(args.model).eval()
     processor = ChineseCLIPProcessor.from_pretrained(args.model)
     ip, tok = processor.image_processor, processor.tokenizer
-    size = ip.size.get("height") or ip.size.get("shortest_edge")
+    native = ip.size.get("height") or ip.size.get("shortest_edge")
+    size = args.image_size or native
+    if size % 16:
+        raise SystemExit("--image-size 需為 16 的倍數")
 
     # 基準必須在匯出前計算：TorchScript 匯出會改動模型的注意力實作等內部狀態，
     # 之後再算會讓文字編碼器的基準偏移（fp32 自比只剩約 0.95）。
-    ref = Reference(model, processor, CONTEXT_LENGTH) if args.quantize else None
+    ref = Reference(model, processor, CONTEXT_LENGTH, image_size=size) if args.quantize else None
 
     raw = {"image": args.out / "image.fp32.onnx", "text": args.out / "text.fp32.onnx"}
     with torch.no_grad():
@@ -139,7 +145,8 @@ def main():
     final["vocab"].write_text("\n".join(vocab.keys()) + "\n", encoding="utf-8")
 
     tag = "-".join(v.split(" ")[0] for v in (chosen["image"], chosen["text"]))
-    version = args.version or f'{args.model.split("/")[-1]}-{tag}'
+    res = "" if size == native else f"-{size}px"
+    version = args.version or f'{args.model.split("/")[-1]}{res}-{tag}'
     manifest = {
         "version": version,
         "embeddingDim": model.config.projection_dim,

@@ -94,11 +94,41 @@ def time_single(fn, x, runs=8):
     return (time.perf_counter() - t) / runs * 1000
 
 
+def write_report(rows, out):
+    base = next((r for r in rows if r[0].endswith("（目前）") and r[2]), None)
+    lines = [
+        "# 中文圖文檢索評估（XTD10-zh，1000 張圖 × 1000 句描述）", "",
+        "Recall@K：用中文描述搜尋，正確的那張圖排在前 K 名的比例（%，越高越好）。",
+        "耗時為 GitHub 伺服器（x86、4 執行緒、未量化）上單張影像推論的毫秒數，只用來看相對速度。", "",
+        "| 模型 | 影像端 | 耗時 ms | 相對速度 | 繁體 R@1 | 繁體 R@5 | 繁體 R@10 | 簡體 R@1 | 簡體 R@5 | 簡體 R@10 | 備註 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for name, side, ms, rs, rt, note in rows:
+        if ms is None:
+            lines.append(f"| {name} | | | | | | | | | | {note} |")
+            continue
+        speed = f"{base[2] / ms:.1f}×" if base else ""
+        lines.append(
+            f"| {name} | {side} | {ms:.0f} | {speed} | {rt[1]:.1f} | {rt[5]:.1f} | {rt[10]:.1f} "
+            f"| {rs[1]:.1f} | {rs[5]:.1f} | {rs[10]:.1f} | {note} |")
+    report = "\n".join(lines) + "\n"
+    out.write_text(report, encoding="utf-8")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(report)
+    print("\n===== REPORT =====\n" + report)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("--out", type=Path, default=Path("eval_report.md"))
     ap.add_argument("--cache", type=Path, default=Path("eval_cache"))
-    ap.add_argument("--onnx-dir", type=Path, help="App 打包的模型資料夾（image、text、manifest.json）")
+    ap.add_argument("--onnx-dir", type=Path, action="append", default=[],
+                    help="要一併評估的模型包資料夾（image、text、manifest.json），可重複指定")
+    ap.add_argument("--quick", action="store_true",
+                    help="只評估目前模型、--resolutions 指定的解析度與 --onnx-dir 的模型包")
+    ap.add_argument("--resolutions", type=int, nargs="+", default=[224, 192, 160, 128])
     ap.add_argument("--limit", type=int, default=0, help="只取前 N 筆（除錯用）")
     args = ap.parse_args()
 
@@ -172,37 +202,44 @@ def main():
                 "" if res == 224 else "同一個模型，只降低輸入解析度；文字模型不變")
         attempt(f"Chinese-CLIP ViT-B/16 @{res}px", go)
 
-    for res in (224, 192, 160, 128):
+    for res in args.resolutions:
         run_cn(res)
 
-    # ---- App 實際打包的 int8 ONNX ----
-    if args.onnx_dir and (args.onnx_dir / "manifest.json").exists():
-        def go():
-            import onnxruntime as ort
-            manifest = json.loads((args.onnx_dir / "manifest.json").read_text(encoding="utf-8"))
-            so = ort.SessionOptions()
-            so.intra_op_num_threads = 4
-            img_sess = ort.InferenceSession(str(args.onnx_dir / "image"), so)
-            txt_sess = ort.InferenceSession(str(args.onnx_dir / "text"), so)
-            n = manifest["contextLength"]
-            emb, t = [], 0.0
-            for p in paths:
-                x = cn_pixels(load([p]), manifest["imageSize"]).numpy()
-                s = time.perf_counter()
-                emb.append(img_sess.run(None, {"image": x})[0][0])
-                t += time.perf_counter() - s
+    # ---- 匯出的 ONNX 模型包（App 實際使用的格式）----
+    def run_onnx(onnx_dir):
+        import onnxruntime as ort
+        manifest = json.loads((onnx_dir / "manifest.json").read_text(encoding="utf-8"))
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = 4
+        img_sess = ort.InferenceSession(str(onnx_dir / "image"), so)
+        txt_sess = ort.InferenceSession(str(onnx_dir / "text"), so)
+        n, res = manifest["contextLength"], manifest["imageSize"]
+        emb, t = [], 0.0
+        for p in paths:
+            x = cn_pixels(load([p]), res).numpy()
+            s = time.perf_counter()
+            emb.append(img_sess.run(None, {"image": x})[0][0])
+            t += time.perf_counter() - s
 
-            def text(texts):
-                out = []
-                for q in texts:
-                    ids = cn_proc.tokenizer(q, padding="max_length", max_length=n, truncation=True,
-                                            return_tensors="np")["input_ids"].astype(np.int64)
-                    out.append(txt_sess.run(None, {"text": ids})[0][0])
-                return np.stack(out)
+        def text(texts):
+            out = []
+            for q in texts:
+                ids = cn_proc.tokenizer(q, padding="max_length", max_length=n, truncation=True,
+                                        return_tensors="np")["input_ids"].astype(np.int64)
+                out.append(txt_sess.run(None, {"text": ids})[0][0])
+            return np.stack(out)
 
-            add("App 目前打包的 int8 ONNX", f"ViT-B/16 量化（{manifest.get('quantization')}）",
-                t / len(paths) * 1000, np.stack(emb), text, "手機上實際使用的版本（x86 上的數值）")
-        attempt("App 目前打包的 int8 ONNX", go)
+        size_mb = sum((onnx_dir / k).stat().st_size for k in ("image", "text")) / 1e6
+        add(f"ONNX 模型包：{manifest['version']}", f"{res}px，{manifest.get('quantization')}",
+            t / len(paths) * 1000, np.stack(emb), text, f"App 使用的格式；模型共 {size_mb:.0f} MB")
+
+    for d in args.onnx_dir:
+        if (d / "manifest.json").exists():
+            attempt(f"ONNX 模型包：{d}", lambda d=d: run_onnx(d))
+
+    if args.quick:
+        write_report(rows, args.out)
+        return
 
     # ---- 影像端 ViT-B/32（OpenAI CLIP），配中文／多語文字模型 ----
     b32 = {}
@@ -264,30 +301,7 @@ def main():
                 "同系列的小模型；文字端為 3 層 RBT3，tokenizer 與目前相同")
     attempt("Chinese-CLIP RN50", run_rn50)
 
-    # ---- 報告 ----
-    base = next((r for r in rows if r[0].endswith("（目前）") and r[2]), None)
-    lines = [
-        "# 中文圖文檢索評估（XTD10-zh，1000 張圖 × 1000 句描述）", "",
-        "Recall@K：用中文描述搜尋，正確的那張圖排在前 K 名的比例（%，越高越好）。",
-        "耗時為 GitHub 伺服器（x86、4 執行緒、未量化）上單張影像推論的毫秒數，只用來看相對速度。", "",
-        "| 模型 | 影像端 | 耗時 ms | 相對速度 | 繁體 R@1 | 繁體 R@5 | 繁體 R@10 | 簡體 R@1 | 簡體 R@5 | 簡體 R@10 | 備註 |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
-    ]
-    for name, side, ms, rs, rt, note in rows:
-        if ms is None:
-            lines.append(f"| {name} | | | | | | | | | | {note} |")
-            continue
-        speed = f"{base[2] / ms:.1f}×" if base else ""
-        lines.append(
-            f"| {name} | {side} | {ms:.0f} | {speed} | {rt[1]:.1f} | {rt[5]:.1f} | {rt[10]:.1f} "
-            f"| {rs[1]:.1f} | {rs[5]:.1f} | {rs[10]:.1f} | {note} |")
-    report = "\n".join(lines) + "\n"
-    args.out.write_text(report, encoding="utf-8")
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as f:
-            f.write(report)
-    print("\n===== REPORT =====\n" + report)
+    write_report(rows, args.out)
 
 
 if __name__ == "__main__":

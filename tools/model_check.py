@@ -38,10 +38,27 @@ def sample_images(size=400):
     return [Image.fromarray(i.astype(np.uint8)) for i in (a, b, c)]
 
 
+def pixels(img, size, mean, std):
+    """與 App 相同的前處理：直接縮放成 size×size（不裁切）再正規化，回傳 [1,3,S,S]。"""
+    arr = np.asarray(img.convert("RGB").resize((size, size), Image.BICUBIC), dtype=np.float32) / 255
+    arr = (arr - np.asarray(mean, dtype=np.float32)) / np.asarray(std, dtype=np.float32)
+    return arr.transpose(2, 0, 1)[None].copy()
+
+
+def encode_image(model, pixel_values):
+    """影像特徵；輸入不是模型原生解析度時，對位置編碼做內插。"""
+    native = model.config.vision_config.image_size
+    out = model.vision_model(pixel_values=pixel_values,
+                             interpolate_pos_encoding=pixel_values.shape[-1] != native)
+    return model.visual_projection(out.pooler_output)
+
+
 class Reference:
     """原始模型對固定樣本的輸出，供各種 ONNX 變體比對。"""
 
-    def __init__(self, model, processor, context_length):
+    def __init__(self, model, processor, context_length, image_size=None):
+        ip = processor.image_processor
+        image_size = image_size or model.config.vision_config.image_size
         tok = processor.tokenizer
         self.text_inputs, self.text_refs, self.cases = [], [], []
         self.image_inputs, self.image_refs = [], []
@@ -57,10 +74,9 @@ class Reference:
                     attention_mask=torch.from_numpy(enc["attention_mask"].astype(np.int64)),
                 )).numpy())
             for img in sample_images():
-                px = processor(images=img, return_tensors="np")["pixel_values"].astype(np.float32)
+                px = pixels(img, image_size, ip.image_mean, ip.image_std)
                 self.image_inputs.append(px)
-                self.image_refs.append(features(model.get_image_features(
-                    pixel_values=torch.from_numpy(px))).numpy())
+                self.image_refs.append(encode_image(model, torch.from_numpy(px)).numpy())
 
     def scores(self, onnx_path, kind):
         """回傳每個樣本的 cosine（kind 為 'text' 或 'image'）。"""

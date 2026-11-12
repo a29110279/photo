@@ -27,7 +27,8 @@ def main():
     manifest = json.loads((args.model_dir / "manifest.json").read_text(encoding="utf-8"))
     n = manifest["contextLength"]
     ref = Reference(ChineseCLIPModel.from_pretrained(args.model).eval(),
-                    ChineseCLIPProcessor.from_pretrained(args.model), n)
+                    ChineseCLIPProcessor.from_pretrained(args.model), n,
+                    image_size=manifest["imageSize"])
 
     print("量化設定：", manifest.get("quantization"))
     if not 64 <= manifest["imageSize"] <= 1024:
