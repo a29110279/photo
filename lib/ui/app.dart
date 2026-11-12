@@ -21,7 +21,7 @@ class PhotoPromptApp extends StatelessWidget {
       useMaterial3: true,
     );
     return MaterialApp(
-      title: '提示詞相簿',
+      title: '理理相簿',
       theme: theme(Brightness.light),
       darkTheme: theme(Brightness.dark),
       home: const PermissionGate(),
@@ -105,11 +105,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         _startHeartbeat();
         ref.read(indexProvider.notifier).autoIndex();
       },
+      // 離開畫面時就排背景任務：此時 App 仍算在前景，Android 才允許啟動前景服務。
+      onHide: () => scheduleBackgroundIndexing().catchError((_) {}),
       // 進入背景：停止前景索引，交給背景任務接著做。
       onPause: () {
         _stopHeartbeat();
         ref.read(indexProvider.notifier).pause();
-        scheduleBackgroundIndexing().catchError((_) {});
       },
     );
   }

@@ -1,4 +1,4 @@
-# 提示詞相簿（photo_prompt）
+# 理理相簿（photo_prompt）
 
 以自然語言提示詞（例如「去年在日本拍的海邊影片」）篩選手機內的相片與影片，並把結果整理進相簿。
 Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evaluation.md](docs/project-evaluation.md)。

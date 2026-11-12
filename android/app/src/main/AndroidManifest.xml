@@ -7,7 +7,7 @@
     <!-- 讀取相片 EXIF 中的 GPS -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
     <application
-        android:label="提示詞相簿"
+        android:label="理理相簿"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

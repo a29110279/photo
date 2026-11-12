@@ -2,10 +2,10 @@
 /// 中日韓字元逐字切分，其餘以空白/標點切分後做 WordPiece。
 class BertTokenizer {
   BertTokenizer(this.vocab)
-      : cls = vocab['[CLS]'] ?? 101,
-        sep = vocab['[SEP]'] ?? 102,
-        pad = vocab['[PAD]'] ?? 0,
-        unk = vocab['[UNK]'] ?? 100;
+    : cls = vocab['[CLS]'] ?? 101,
+      sep = vocab['[SEP]'] ?? 102,
+      pad = vocab['[PAD]'] ?? 0,
+      unk = vocab['[UNK]'] ?? 100;
 
   /// 由 vocab.txt 內容建立（每行一個 token，行號即 id）。
   factory BertTokenizer.fromVocabText(String text) {

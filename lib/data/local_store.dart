@@ -79,16 +79,26 @@ class LocalStore {
 
   static const _version = 5;
 
+  /// [singleInstance] 為 false 時開啟獨立的連線（背景索引用）：
+  /// sqflite 預設同一路徑共用一條原生連線，背景任務結束時關閉連線，
+  /// 會連帶關掉前景 App 正在用的連線（database_closed）。
   static Future<LocalStore> open(
     String path, {
     DatabaseFactory? factory,
+    bool singleInstance = true,
   }) async {
     final f = factory ?? databaseFactory;
     final db = await f.openDatabase(
       path,
       options: OpenDatabaseOptions(
         version: _version,
-        onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+        singleInstance: singleInstance,
+        onConfigure: (db) async {
+          await db.execute('PRAGMA foreign_keys = ON');
+          // 前景與背景各有一條連線：WAL 讓讀寫可同時進行，寫入衝突時最多等 10 秒。
+          await db.rawQuery('PRAGMA journal_mode = WAL');
+          await db.rawQuery('PRAGMA busy_timeout = 10000');
+        },
         onUpgrade: (db, oldVersion, _) async {
           if (oldVersion < 2) {
             await db.execute(

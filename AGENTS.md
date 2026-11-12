@@ -1,4 +1,4 @@
-# 提示詞相簿（photo_prompt）
+# 理理相簿（photo_prompt）
 
 Flutter（iOS / Android）App：以自然語言提示詞篩選相片與影片並整理成相簿，全裝置端運算。
 規劃見 `docs/project-evaluation.md`，實作範圍與架構見 `README.md`。

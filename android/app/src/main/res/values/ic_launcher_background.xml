@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 自適應圖示的底色（漫畫網點的黃色） -->
+    <color name="ic_launcher_background">#F6CD3C</color>
+</resources>

@@ -209,8 +209,9 @@ class IndexController extends Notifier<IndexProgress> {
     if (_svc.isRunning) return;
     // 直接讀資料庫：開關的 provider 可能還沒載入完成。
     final store = ref.read(storeProvider);
-    final withOcr = await store.getSetting(SettingKeys.ocrEnabled) == '1';
-    final withFaces = await store.getSetting(SettingKeys.facesEnabled) == '1';
+    // OCR 與人物分群預設開啟，只有使用者關閉時（'0'）才略過。
+    final withOcr = await store.getSetting(SettingKeys.ocrEnabled) != '0';
+    final withFaces = await store.getSetting(SettingKeys.facesEnabled) != '0';
     FaceService? faces;
     if (withFaces) {
       try {
@@ -252,16 +253,16 @@ final indexProvider = NotifierProvider<IndexController, IndexProgress>(
   IndexController.new,
 );
 
-/// OCR 開關（O9）：預設關閉，因為會增加索引時間。
+/// OCR 開關（O9）：預設開啟。
 class OcrSettingController extends Notifier<bool> {
   @override
   bool build() {
     Future.microtask(() async {
       state =
-          await ref.read(storeProvider).getSetting(SettingKeys.ocrEnabled) ==
-          '1';
+          await ref.read(storeProvider).getSetting(SettingKeys.ocrEnabled) !=
+          '0';
     });
-    return false;
+    return true;
   }
 
   Future<void> set(bool v) async {
@@ -276,16 +277,16 @@ final ocrEnabledProvider = NotifierProvider<OcrSettingController, bool>(
   OcrSettingController.new,
 );
 
-/// 人物分群開關（O12）：預設關閉，因為每張相片要多做人臉偵測。
+/// 人物分群開關（O12）：預設開啟。
 class FaceSettingController extends Notifier<bool> {
   @override
   bool build() {
     Future.microtask(() async {
       state =
-          await ref.read(storeProvider).getSetting(SettingKeys.facesEnabled) ==
-          '1';
+          await ref.read(storeProvider).getSetting(SettingKeys.facesEnabled) !=
+          '0';
     });
-    return false;
+    return true;
   }
 
   Future<void> set(bool v) async {

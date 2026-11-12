@@ -1,5 +1,5 @@
 name: native_media
-description: "提示詞相簿自用的原生功能：OCR（ML Kit / Apple Vision）與影片抽幀。"
+description: "理理相簿自用的原生功能：OCR（ML Kit / Apple Vision）與影片抽幀。"
 version: 0.0.1
 publish_to: 'none'
 
