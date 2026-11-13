@@ -1,0 +1,50 @@
+# 評估人臉特徵模型（O12）：量化後的辨識力、分群門檻，以及能否在手機的 ONNX Runtime 版本執行。
+# 只能手動執行，不會觸發 APK 建置，產物也不會被打包。
+name: Evaluate face model
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install --no-deps facenet-pytorch
+          pip install onnx onnxruntime numpy pillow requests tqdm scikit-learn
+
+      - name: Export the face model as shipped
+        run: python tools/export_face_model.py --out dist/face --quantize
+
+      - uses: actions/setup-python@v5
+        id: py311
+        with:
+          python-version: '3.11'
+          update-environment: false
+
+      - name: Run the face model on the phone's ONNX Runtime version
+        run: |
+          "${{ steps.py311.outputs.python-path }}" -m venv ort-device
+          ort-device/bin/pip install -q "numpy<2" "onnxruntime==1.15.1"
+          ort-device/bin/python tools/device_runtime_check.py --face-dir dist/face
+
+      - name: Evaluate on LFW pairs
+        if: always()
+        run: python tools/poc/eval_face.py --face-dir dist/face --out face_report.md
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: face-eval-report
+          path: face_report.md
+          retention-days: 30

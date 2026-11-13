@@ -44,10 +44,22 @@ import onnxruntime as ort  # noqa: E402
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("--model-dir", type=Path, default=Path("dist/model"))
+    ap.add_argument("--face-dir", type=Path, help="改為檢查人臉模型（含 face 與 face_manifest.json）")
     ap.add_argument("--runtime", default="1.15.", help="預期的 ONNX Runtime 版本開頭")
     args = ap.parse_args()
     if not ort.__version__.startswith(args.runtime):
         raise SystemExit(f"需要 ONNX Runtime {args.runtime}x，目前是 {ort.__version__}")
+
+    if args.face_dir:
+        m = json.loads((args.face_dir / "face_manifest.json").read_text(encoding="utf-8"))
+        s = m["inputSize"]
+        face = ort.InferenceSession(str(args.face_dir / "face"), providers=["CPUExecutionProvider"])
+        x = np.random.default_rng(0).standard_normal((1, 3, s, s)).astype(np.float32)
+        out = face.run(None, {face.get_inputs()[0].name: x})[0]
+        if out.shape != (1, m["embeddingDim"]) or not np.isfinite(out).all():
+            raise SystemExit(f"face 的輸出不正確：{out.shape}")
+        print(f"face：OK（ONNX Runtime {ort.__version__}）")
+        return
 
     manifest = json.loads((args.model_dir / "manifest.json").read_text(encoding="utf-8"))
     size, dim = manifest["imageSize"], manifest["embeddingDim"]
