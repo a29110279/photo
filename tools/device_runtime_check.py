@@ -12,8 +12,33 @@ import argparse
 import json
 from pathlib import Path
 
+import importlib.util
+import struct
+
 import numpy as np
-import onnxruntime as ort
+
+
+def _clear_execstack():
+    """舊版 onnxruntime 的函式庫標示需要可執行堆疊，較新的 glibc 會拒絕載入；先清掉該旗標。"""
+    spec = importlib.util.find_spec("onnxruntime")
+    if spec is None or not spec.submodule_search_locations:
+        return
+    for so in Path(spec.submodule_search_locations[0]).glob("capi/onnxruntime_pybind11_state*.so"):
+        data = bytearray(so.read_bytes())
+        if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:  # 只處理 64 位元 little-endian
+            continue
+        phoff, = struct.unpack_from("<Q", data, 0x20)
+        phentsize, phnum = struct.unpack_from("<HH", data, 0x36)
+        for i in range(phnum):
+            base = phoff + i * phentsize
+            p_type, p_flags = struct.unpack_from("<II", data, base)
+            if p_type == 0x6474E551 and p_flags & 1:  # PT_GNU_STACK 帶 PF_X
+                struct.pack_into("<I", data, base + 4, p_flags & ~1)
+                so.write_bytes(data)
+
+
+_clear_execstack()
+import onnxruntime as ort  # noqa: E402
 
 
 def main():
