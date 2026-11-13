@@ -10,6 +10,7 @@ import '../data/setting_keys.dart';
 
 export '../data/setting_keys.dart';
 import '../data/media_repository.dart';
+import '../data/media_sizes.dart';
 import '../services/album_service.dart';
 import '../services/duplicate_service.dart';
 import '../services/embedding_service.dart';
@@ -316,6 +317,9 @@ final peopleProvider = FutureProvider.autoDispose<List<Person>>(
 
 // ---- 搜尋（C6/C8/C11/O2） ----
 
+/// 搜尋結果的排列方式。
+enum SearchSort { relevance, newest, oldest }
+
 class SearchUiState {
   const SearchUiState({
     this.result,
@@ -324,7 +328,15 @@ class SearchUiState {
     this.selected = const {},
     this.busy = false,
     this.error,
+    this.sort = SearchSort.relevance,
   });
+
+  /// 使用者選的排序。純 metadata 查詢沒有相關度，選「相關度」時等同新到舊。
+  final SearchSort sort;
+
+  /// 目前是否依時間排列（此時結果會依月份分組）。
+  bool get byTime =>
+      result != null && (sort != SearchSort.relevance || !result!.isSemantic);
 
   final SearchResult? result;
   final double threshold;
@@ -337,7 +349,16 @@ class SearchUiState {
   double get activeThreshold =>
       result?.byImage == true ? imageThreshold : threshold;
 
-  List<SearchHit> get visible => result?.above(activeThreshold) ?? const [];
+  /// 通過門檻、依目前排序排列的結果。
+  List<SearchHit> get visible {
+    final hits = result?.above(activeThreshold) ?? const <SearchHit>[];
+    if (!byTime) return hits;
+    final oldest = sort == SearchSort.oldest;
+    return [...hits]..sort((a, b) {
+      final c = a.asset.createTs.compareTo(b.asset.createTs);
+      return oldest ? c : -c;
+    });
+  }
 
   SearchUiState copyWith({
     SearchResult? result,
@@ -346,7 +367,9 @@ class SearchUiState {
     Set<String>? selected,
     bool? busy,
     String? error,
+    SearchSort? sort,
   }) => SearchUiState(
+    sort: sort ?? this.sort,
     result: result ?? this.result,
     threshold: threshold ?? this.threshold,
     imageThreshold: imageThreshold ?? this.imageThreshold,
@@ -485,16 +508,10 @@ class SearchController extends Notifier<SearchUiState> {
     final r = state.result;
     if (r == null) return;
     state = state.copyWith(
-      result: SearchResult(
-        r.query,
-        [
-          for (final h in r.hits)
-            if (!ids.contains(h.asset.id)) h,
-        ],
-        queryVector: r.queryVector,
-        byImage: r.byImage,
-        refined: r.refined,
-      ),
+      result: r.withHits([
+        for (final h in r.hits)
+          if (!ids.contains(h.asset.id)) h,
+      ]),
       selected: state.selected.difference(ids),
     );
   }
@@ -503,7 +520,10 @@ class SearchController extends Notifier<SearchUiState> {
   void clear() => state = SearchUiState(
     threshold: state.threshold,
     imageThreshold: state.imageThreshold,
+    sort: state.sort,
   );
+
+  void setSort(SearchSort sort) => state = state.copyWith(sort: sort);
 
   /// 反選：先全選再點掉不要的（排除），或反過來。
   void invertSelection() => state = state.copyWith(
@@ -560,6 +580,23 @@ final screenshotsProvider = FutureProvider.autoDispose<List<AssetRecord>>(
 final blurriestProvider = FutureProvider.autoDispose<List<AssetRecord>>(
   (ref) => ref.watch(storeProvider).blurriest(),
 );
+
+/// 最佔空間的項目：id → 位元組，由大到小。此平台不支援時為空。
+final mediaSizesProvider = FutureProvider.autoDispose<Map<String, int>>(
+  (ref) => const MediaSizes().largest(),
+);
+
+/// 最佔空間的項目（已在資料庫中的），由大到小。
+final largestProvider = FutureProvider.autoDispose<List<AssetRecord>>((
+  ref,
+) async {
+  final sizes = await ref.watch(mediaSizesProvider.future);
+  if (sizes.isEmpty) return const [];
+  final byId = {
+    for (final a in await ref.watch(storeProvider).allAssets()) a.id: a,
+  };
+  return [for (final id in sizes.keys) ?byId[id]];
+});
 
 // ---- 事件（O11） ----
 

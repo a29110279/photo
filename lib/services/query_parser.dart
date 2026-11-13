@@ -3,7 +3,7 @@ import 'gazetteer.dart';
 enum MediaKind { image, video }
 
 /// 可個別移除的搜尋條件。
-enum QueryPart { date, place, kind, person, text, semantic }
+enum QueryPart { date, place, kind, person, text, semantic, exclude }
 
 /// 規則式解析結果：結構化條件 + 剩餘語意查詢。
 class ParsedQuery {
@@ -18,6 +18,7 @@ class ParsedQuery {
     this.dateLabel,
     this.textTerms = const [],
     this.person,
+    this.exclude = const [],
   });
 
   final String raw;
@@ -41,6 +42,9 @@ class ParsedQuery {
   /// 人物名稱（O12），由 SearchService 比對已命名的人物後填入。
   final String? person;
 
+  /// 要排除的內容（例如「不要有人」的「人」）：以語意模型比對，符合者自結果剔除。
+  final List<String> exclude;
+
   ParsedQuery withPerson(String name) => ParsedQuery(
     raw: raw,
     from: from,
@@ -52,9 +56,10 @@ class ParsedQuery {
     dateLabel: dateLabel,
     textTerms: textTerms,
     person: name,
+    exclude: exclude,
   );
 
-  /// 移除一項條件（搜尋頁條件標籤上的 X）。[term] 指定要移除的 OCR 字詞。
+  /// 移除一項條件（搜尋頁條件標籤上的 X）。[term] 指定要移除的 OCR 字詞或排除內容。
   ParsedQuery without(QueryPart part, {String? term}) => ParsedQuery(
     raw: raw,
     from: part == QueryPart.date ? null : from,
@@ -71,6 +76,12 @@ class ParsedQuery {
           ]
         : textTerms,
     person: part == QueryPart.person ? null : person,
+    exclude: part == QueryPart.exclude
+        ? [
+            for (final t in exclude)
+              if (t != term) t,
+          ]
+        : exclude,
   );
 
   /// 由目前的條件組回提示詞（重新解析會得到相同條件）。
@@ -81,6 +92,7 @@ class ParsedQuery {
     if (semantic.isNotEmpty) semantic,
     if (kind != null) kind == MediaKind.video ? '影片' : '照片',
     for (final t in textTerms) '「$t」',
+    for (final t in exclude) '不要$t',
   ].join(' ');
 
   bool get hasFilter =>
@@ -111,6 +123,9 @@ class QueryParser {
     '九': 9,
   };
   static const _num = r'(\d+|[零〇一二兩三四五六七八九十]+)';
+
+  /// 一次查詢最多幾個排除條件（每個都要多算一次文字向量）。
+  static const maxExclude = 4;
 
   static const _seasons = {
     '春': {3, 4, 5},
@@ -159,6 +174,19 @@ class QueryParser {
           .replaceAll(RegExp('(上面)?(寫著|寫有|印著|有)?\\s*(的)?(字樣|文字|字)'), ' ')
           .replaceAll(RegExp('(寫著|寫有|印著)'), ' ');
     }
+    // 排除條件：「不要有人」「沒有文字的」「排除截圖」「-人」。
+    // 先抽出，避免排除的內容被當成日期、地點或要找的東西。
+    final exclude = <String>[];
+    final notRe = RegExp(
+      '(?:不要有|不想要|不要|沒有|没有|不包含|不含|排除|去掉|除了)\\s*([^\\s，,、。；;的]+)的?'
+      '|(?:^|\\s)[-－−]\\s*([^\\s，,、。；;]+)',
+    );
+    text = text.replaceAllMapped(notRe, (m) {
+      final t = (m[1] ?? m[2])!.replaceAll(RegExp('(以外|之外)\$'), '').trim();
+      if (t.isEmpty) return m[0]!;
+      if (!exclude.contains(t) && exclude.length < maxExclude) exclude.add(t);
+      return ' ';
+    });
     DateTime? from, to;
     Set<int>? months;
     String? dateLabel;
@@ -324,6 +352,7 @@ class QueryParser {
       semantic: _cleanSemantic(text),
       dateLabel: dateLabel,
       textTerms: textTerms,
+      exclude: exclude,
     );
   }
 

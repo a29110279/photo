@@ -39,6 +39,12 @@ def main():
         worst = min(worst, *scores)
         print(kind, " ".join(f"{s:.4f}" for s in scores))
 
+    batch = manifest.get("imageBatch", 1)
+    if batch > 1:
+        scores = ref.batch_scores(args.model_dir / "image", batch)
+        worst = min(worst, *scores)
+        print(f"image（批次 {batch}）", " ".join(f"{s:.4f}" for s in scores))
+
     args.cases.parent.mkdir(parents=True, exist_ok=True)
     args.cases.write_text(json.dumps({"contextLength": n, "cases": ref.cases},
                                      ensure_ascii=False, indent=1), encoding="utf-8")

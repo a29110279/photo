@@ -124,7 +124,7 @@ class MediaRepository {
     int everySeconds = 5,
     int maxFrames = 8,
   }) async {
-    // 模型輸入為 224×224，取稍大的縮圖即可，讀取與解碼都較快。
+    // 模型輸入遠小於原圖，取稍大的縮圖即可，讀取與解碼都較快。
     const size = ThumbnailSize.square(320);
     if (a.type != AssetType.video) {
       final t = await a.thumbnailDataWithSize(size, quality: 90);

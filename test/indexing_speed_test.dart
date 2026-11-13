@@ -34,6 +34,22 @@ void main() {
     expect(threadCandidates(1), [1]);
   });
 
+  test('推論設定：差距不到一成時維持原設定，並可存回快取', () {
+    expect(clearlyFaster(89, 100), isTrue);
+    expect(clearlyFaster(95, 100), isFalse);
+
+    const t = InferenceTuning(threads: 4, xnnpack: true, batch: 4, ms: 51.5);
+    expect(t.label, '4 執行緒・XNNPACK・批次 4');
+    expect(const InferenceTuning(threads: 2).label, '2 執行緒');
+    final back = InferenceTuning.fromJson(t.toJson());
+    expect(
+      (back.threads, back.xnnpack, back.batch, back.ms),
+      (4, true, 4, 51.5),
+    );
+    // 舊格式的快取只有執行緒數。
+    expect(InferenceTuning.fromJson({'threads': 6}).batch, 1);
+  });
+
   group('normalizeRgba', () {
     const spec = PreprocessSpec(2, [0.5, 0.5, 0.5], [0.5, 0.5, 0.5], false);
 

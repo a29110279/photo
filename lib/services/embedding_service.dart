@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -150,6 +151,54 @@ List<int> threadCandidates(int processors) {
   return out.isEmpty ? [processors.clamp(1, 4)] : out;
 }
 
+/// 影像推論的執行設定：首次啟動（或換模型）時在這支手機上實測選出，結果快取。
+class InferenceTuning {
+  const InferenceTuning({
+    required this.threads,
+    this.xnnpack = false,
+    this.batch = 1,
+    this.ms,
+  });
+
+  /// 快取格式版本；測速的項目有增減時遞增，舊快取會重測。
+  static const format = 2;
+
+  final int threads;
+
+  /// 是否使用 XNNPACK 加速後端。
+  final bool xnnpack;
+
+  /// 一次推論的張數；1 表示逐張。
+  final int batch;
+
+  /// 實測每張影像的推論毫秒數。
+  final double? ms;
+
+  /// 顯示在設定頁的說明。
+  String get label =>
+      '$threads 執行緒'
+      '${xnnpack ? '・XNNPACK' : ''}'
+      '${batch > 1 ? '・批次 $batch' : ''}';
+
+  Map<String, Object?> toJson() => {
+    'threads': threads,
+    'xnnpack': xnnpack,
+    'batch': batch,
+    'ms': ms,
+  };
+
+  static InferenceTuning fromJson(Map<dynamic, dynamic> j) => InferenceTuning(
+    threads: j['threads'] as int,
+    xnnpack: j['xnnpack'] as bool? ?? false,
+    batch: j['batch'] as int? ?? 1,
+    ms: (j['ms'] as num?)?.toDouble(),
+  );
+}
+
+/// 候選設定至少快一成才採用：差距在量測誤差內時，維持較單純的設定。
+bool clearlyFaster(double candidateMs, double baselineMs) =>
+    candidateMs <= baselineMs * 0.9;
+
 /// 裝置端 CLIP 推論（ONNX Runtime）。解碼用平台原生解碼器，推論在背景 Isolate 執行。
 class EmbeddingService {
   EmbeddingService._(
@@ -157,11 +206,11 @@ class EmbeddingService {
     this._image,
     this._text,
     this._tokenizer,
-    this.threads,
+    this.tuning,
   );
 
-  /// 影像推論使用的執行緒數（實測選出）。
-  final int threads;
+  /// 影像推論的執行設定（實測選出）。
+  final InferenceTuning tuning;
 
   final InstalledModel model;
   final OrtSession _image;
@@ -172,77 +221,138 @@ class EmbeddingService {
     final imagePath = model.path('image');
     final textPath = model.path('text');
     final size = model.manifest.imageSize;
-    final tuningFile = File('${model.dir}/tuning.json');
+    final maxBatch = model.manifest.imageBatch;
     final processors = Platform.numberOfProcessors;
+    final tuningFile = File('${model.dir}/tuning.json');
+    // 測速期間存在的標記檔；啟動時還在，表示上次測速沒跑完。
+    final marker = File('${model.dir}/tuning.running');
+    final key = {
+      'format': InferenceTuning.format,
+      'version': model.manifest.version,
+      'image': model.manifest.files['image']!.sha256,
+      'processors': processors,
+    };
 
-    // 上次測速選出的執行緒數（依模型版本與核心數快取）。
-    int? cached;
+    InferenceTuning? cached;
     try {
       final t = jsonDecode(await tuningFile.readAsString()) as Map;
-      if (t['version'] == model.manifest.version &&
-          t['processors'] == processors) {
-        cached = t['threads'] as int;
+      if (key.entries.every((e) => t[e.key] == e.value)) {
+        cached = InferenceTuning.fromJson(t);
       }
     } on Object {
       cached = null;
     }
-    final candidates = cached != null ? [cached] : threadCandidates(processors);
+    // 上次測速中斷（可能是某個加速方式讓 App 當掉）：這次只測執行緒數，
+    // 不再嘗試 XNNPACK 與批次，避免每次啟動都當在同一個地方。
+    final interrupted = cached == null && await marker.exists();
+    if (cached == null) {
+      try {
+        await marker.writeAsString('');
+      } on Object {
+        // 寫不進標記只是少一層保護。
+      }
+    }
+    final candidates = threadCandidates(processors);
 
     // 建立 session（讀檔 + 圖最佳化）需要數秒且是同步呼叫，放在 UI isolate 會讓畫面卡住；
     // 改在另一個 isolate 建立，只把原生指標位址傳回來。
     final r = await Isolate.run(() {
       OrtEnv.instance.init();
-      OrtSession open(String path, int threads) {
+      OrtSession open(String path, int threads, {bool xnnpack = false}) {
         final opts = OrtSessionOptions()
           ..setIntraOpNumThreads(threads)
           ..setSessionGraphOptimizationLevel(
             GraphOptimizationLevel.ortEnableAll,
           );
         try {
+          if (xnnpack) opts.appendXnnpackProvider();
           return OrtSession.fromFile(File(path), opts);
         } finally {
           opts.release();
         }
       }
 
-      // 影像模型：各種執行緒數實測推論時間，留下最快的（只在首次或換模型時做）。
-      // 手機的大小核配置各不相同，固定值不一定最快。
-      OrtSession? best;
-      var bestThreads = candidates.first;
+      ({int image, int text, InferenceTuning tuning}) result(
+        OrtSession image,
+        InferenceTuning tuning,
+      ) => (
+        image: image.address,
+        text: open(textPath, tuning.threads.clamp(1, 4)).address,
+        tuning: tuning,
+      );
+
+      final known = cached;
+      if (known != null) {
+        return result(
+          open(imagePath, known.threads, xnnpack: known.xnnpack),
+          known,
+        );
+      }
+
+      // 1. 執行緒數：手機的大小核配置各不相同，固定值不一定最快。
+      late OrtSession best;
+      var threads = candidates.first;
       double? bestMs;
-      for (final threads in candidates) {
-        final session = open(imagePath, threads);
-        if (candidates.length == 1) {
-          best = session;
-          break;
-        }
-        final ms = _benchmark(session, size);
+      for (final t in candidates) {
+        final session = open(imagePath, t);
+        final ms = _benchmark(session, size, 1);
         if (bestMs == null || ms < bestMs) {
-          best?.release();
+          if (bestMs != null) best.release();
           best = session;
-          bestThreads = threads;
+          threads = t;
           bestMs = ms;
         } else {
           session.release();
         }
       }
-      return (
-        image: best!.address,
-        text: open(textPath, bestThreads.clamp(1, 4)).address,
-        threads: bestThreads,
-        ms: bestMs,
+      var ms = bestMs!;
+      var xnnpack = false;
+      var batch = 1;
+      if (!interrupted) {
+        // 2. XNNPACK：針對 ARM 最佳化的運算後端，模型裡它支援的運算才會變快。
+        try {
+          final session = open(imagePath, threads, xnnpack: true);
+          final t = _benchmark(session, size, 1);
+          if (clearlyFaster(t, ms)) {
+            best.release();
+            best = session;
+            xnnpack = true;
+            ms = t;
+          } else {
+            session.release();
+          }
+        } on Object {
+          // 這個 runtime 沒有 XNNPACK，或模型與它不相容：維持原設定。
+        }
+        // 3. 批次：一次推論多張，每張平均較快才採用。
+        if (maxBatch > 1) {
+          try {
+            final t = _benchmark(best, size, maxBatch) / maxBatch;
+            if (clearlyFaster(t, ms)) {
+              batch = maxBatch;
+              ms = t;
+            }
+          } on Object {
+            // 模型不支援批次：逐張推論。
+          }
+        }
+      }
+      return result(
+        best,
+        InferenceTuning(
+          threads: threads,
+          xnnpack: xnnpack,
+          batch: batch,
+          ms: ms,
+        ),
       );
     });
     if (cached == null) {
       try {
         await tuningFile.writeAsString(
-          jsonEncode({
-            'version': model.manifest.version,
-            'processors': processors,
-            'threads': r.threads,
-            'ms': r.ms,
-          }),
+          jsonEncode({...key, ...r.tuning.toJson()}),
         );
+        await marker.delete();
       } on Object {
         // 寫不進去只是下次再測一次。
       }
@@ -254,15 +364,15 @@ class EmbeddingService {
       OrtSession.fromAddress(r.image),
       OrtSession.fromAddress(r.text),
       BertTokenizer.fromVocabText(vocab),
-      r.threads,
+      r.tuning,
     );
   }
 
-  /// 以全零輸入實測單次推論的平均毫秒數（先暖機一次）。
-  static double _benchmark(OrtSession session, int size) {
+  /// 以全零輸入實測一次推論 [batch] 張的平均毫秒數（先暖機一次）。
+  static double _benchmark(OrtSession session, int size, int batch) {
     final input = OrtValueTensor.createTensorWithDataList(
-      Float32List(3 * size * size),
-      [1, 3, size, size],
+      Float32List(batch * 3 * size * size),
+      [batch, 3, size, size],
     );
     final options = OrtRunOptions();
     void once() {
@@ -295,12 +405,54 @@ class EmbeddingService {
   Future<PreparedImage?> prepare(Uint8List bytes) => prepareImage(bytes, _spec);
 
   /// 以前處理好的輸入推論。
-  Future<Float32List?> embedPrepared(PreparedImage image) {
+  Future<Float32List?> embedPrepared(PreparedImage image) async {
     final s = model.manifest.imageSize;
-    return _run(
+    final rows = await _run(
       _image,
       OrtValueTensor.createTensorWithDataList(image.input, [1, 3, s, s]),
     );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// 推論多張：依實測選出的批次大小分批送進模型。
+  /// 回傳與輸入同順序；推論失敗的那張為 null。
+  Future<List<Float32List?>> embedPreparedAll(
+    List<PreparedImage> images,
+  ) async {
+    final out = List<Float32List?>.filled(images.length, null);
+    final s = model.manifest.imageSize;
+    final per = 3 * s * s;
+    for (var i = 0; i < images.length; i += tuning.batch) {
+      final n = math.min(tuning.batch, images.length - i);
+      var rows = const <Float32List>[];
+      if (n > 1) {
+        try {
+          final input = Float32List(n * per);
+          for (var k = 0; k < n; k++) {
+            input.setAll(k * per, images[i + k].input);
+          }
+          rows = await _run(
+            _image,
+            OrtValueTensor.createTensorWithDataList(input, [n, 3, s, s]),
+          );
+        } on Object {
+          rows = const [];
+        }
+      }
+      for (var k = 0; k < n; k++) {
+        if (rows.length == n) {
+          out[i + k] = rows[k];
+          continue;
+        }
+        // 單張，或整批失敗時逐張重試，避免一張壞圖拖累同批的其他張。
+        try {
+          out[i + k] = await embedPrepared(images[i + k]);
+        } on Object {
+          out[i + k] = null;
+        }
+      }
+    }
+    return out;
   }
 
   String get version => model.manifest.version;
@@ -313,13 +465,21 @@ class EmbeddingService {
   }
 
   /// 文字 → 已正規化的 embedding。
-  Future<Float32List?> embedText(String text) {
+  Future<Float32List?> embedText(String text) async {
     final n = model.manifest.contextLength;
     final ids = Int64List.fromList(_tokenizer.encode(text, contextLength: n));
-    return _run(_text, OrtValueTensor.createTensorWithDataList(ids, [1, n]));
+    final rows = await _run(
+      _text,
+      OrtValueTensor.createTensorWithDataList(ids, [1, n]),
+    );
+    return rows.isEmpty ? null : rows.first;
   }
 
-  Future<Float32List?> _run(OrtSession session, OrtValueTensor input) async {
+  /// 執行模型，回傳每一列已正規化的 embedding。
+  Future<List<Float32List>> _run(
+    OrtSession session,
+    OrtValueTensor input,
+  ) async {
     final options = OrtRunOptions();
     List<OrtValue?>? outputs;
     try {
@@ -327,13 +487,15 @@ class EmbeddingService {
         session.inputNames.first: input,
       });
       final value = outputs?.first?.value;
-      if (value is! List || value.isEmpty) return null;
-      final row = value.first as List;
-      final v = Float32List(row.length);
-      for (var i = 0; i < row.length; i++) {
-        v[i] = (row[i] as num).toDouble();
-      }
-      return l2Normalize(v);
+      if (value is! List) return const [];
+      return [
+        for (final row in value)
+          l2Normalize(
+            Float32List.fromList([
+              for (final x in row as List) (x as num).toDouble(),
+            ]),
+          ),
+      ];
     } finally {
       input.release();
       options.release();

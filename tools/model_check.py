@@ -84,3 +84,14 @@ class Reference:
         inputs, refs = ((self.text_inputs, self.text_refs) if kind == "text"
                         else (self.image_inputs, self.image_refs))
         return [cos(r, sess.run(None, {kind: x})[0]) for x, r in zip(inputs, refs)]
+
+    def batch_scores(self, onnx_path, batch):
+        """把樣本影像湊成一批、一次推論，回傳每張的 cosine。
+
+        動態量化的模型會以整批資料的數值範圍決定量化刻度，同一批的其他影像
+        會影響結果，因此批次推論的準確度要另外確認。模型不支援批次時會丟出例外。
+        """
+        sess = ort.InferenceSession(str(onnx_path))
+        idx = [i % len(self.image_inputs) for i in range(batch)]
+        out = sess.run(None, {"image": np.concatenate([self.image_inputs[i] for i in idx])})[0]
+        return [cos(self.image_refs[i], out[k]) for k, i in enumerate(idx)]

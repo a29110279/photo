@@ -6,6 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetector
@@ -23,7 +24,7 @@ import java.util.concurrent.Executors
 /**
  * App 自用的原生功能。做成外掛後，背景索引的 Flutter 引擎也會自動註冊。
  * - photo_prompt/ocr：ML Kit 中文文字辨識（模型隨 App 打包，不需連網）
- * - photo_prompt/media：影片抽幀、人臉偵測
+ * - photo_prompt/media：影片抽幀、人臉偵測、最佔空間的檔案
  */
 class NativeMediaPlugin : FlutterPlugin {
     private lateinit var context: Context
@@ -79,6 +80,23 @@ class NativeMediaPlugin : FlutterPlugin {
             it.setMethodCallHandler { call, result ->
                 if (call.method == "detectFaces") {
                     detectFaces(call.argument<String>("path"), result)
+                    return@setMethodCallHandler
+                }
+                if (call.method == "largestMedia") {
+                    val limit = call.argument<Number>("limit")?.toInt() ?: 300
+                    val executor = background
+                    if (executor == null) {
+                        result.success(emptyList<Any>())
+                        return@setMethodCallHandler
+                    }
+                    executor.execute {
+                        val rows = try {
+                            largestMedia(limit)
+                        } catch (e: Exception) {
+                            emptyList()
+                        }
+                        mainHandler.post { result.success(rows) }
+                    }
                     return@setMethodCallHandler
                 }
                 if (call.method != "videoFrame") {
@@ -143,6 +161,35 @@ class NativeMediaPlugin : FlutterPlugin {
         } catch (e: Exception) {
             result.error("face_failed", e.message, null)
         }
+    }
+
+    /**
+     * 媒體庫中最佔空間的相片與影片：回傳 [[id, 位元組], ...]，由大到小。
+     * id 與 photo_manager 使用的相同（MediaStore 的 _ID）。
+     */
+    private fun largestMedia(limit: Int): List<List<Any>> {
+        val columns = arrayOf(
+            MediaStore.Files.FileColumns._ID,
+            MediaStore.Files.FileColumns.SIZE
+        )
+        val where = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (?, ?)"
+        val args = arrayOf(
+            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
+            MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString()
+        )
+        val rows = ArrayList<List<Any>>()
+        context.contentResolver.query(
+            MediaStore.Files.getContentUri("external"),
+            columns,
+            where,
+            args,
+            "${MediaStore.Files.FileColumns.SIZE} DESC"
+        )?.use { cursor ->
+            while (rows.size < limit && cursor.moveToNext()) {
+                rows.add(listOf(cursor.getLong(0).toString(), cursor.getLong(1)))
+            }
+        }
+        return rows
     }
 
     /** 取出指定時間附近的畫面，長邊縮到 maxSize，回傳 JPEG。 */

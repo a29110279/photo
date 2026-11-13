@@ -233,6 +233,18 @@ def main():
         add(f"ONNX 模型包：{manifest['version']}", f"{res}px，{manifest.get('quantization')}",
             t / len(paths) * 1000, np.stack(emb), text, f"App 使用的格式；模型共 {size_mb:.0f} MB")
 
+        # 批次推論：動態量化以整批的數值範圍決定刻度，準確度與速度都要另外量。
+        batch = manifest.get("imageBatch", 1)
+        if batch > 1:
+            emb, t = [], 0.0
+            for i in range(0, len(paths), batch):
+                x = np.concatenate([cn_pixels(load([p]), res).numpy() for p in paths[i:i + batch]])
+                s = time.perf_counter()
+                emb.extend(img_sess.run(None, {"image": x})[0])
+                t += time.perf_counter() - s
+            add(f"同上，批次 {batch} 張", f"{res}px", t / len(paths) * 1000, np.stack(emb), text,
+                "索引時一次推論多張；耗時為每張平均")
+
     for d in args.onnx_dir:
         if (d / "manifest.json").exists():
             attempt(f"ONNX 模型包：{d}", lambda d=d: run_onnx(d))

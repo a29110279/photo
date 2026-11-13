@@ -93,11 +93,12 @@ class _Prepared {
 class _StepTimes {
   int fetch = 0, decode = 0, infer = 0, save = 0, items = 0;
 
-  String? describe(int? threads) {
+  /// [tuning] 為推論設定的說明（執行緒數、加速後端、批次）。
+  String? describe(String? tuning) {
     if (items == 0) return null;
     int ms(int micros) => (micros / 1000 / items).round();
     return '讀圖 ${ms(fetch)}・解碼 ${ms(decode)}・推論 ${ms(infer)}・寫入 ${ms(save)} 毫秒'
-        '${threads == null ? '' : '（$threads 執行緒）'}';
+        '${tuning == null ? '' : '（$tuning）'}';
   }
 }
 
@@ -111,7 +112,7 @@ class IndexingService {
   final MediaRepository media;
   final OcrService ocr;
 
-  /// 預先準備的項目數。
+  /// 預先準備的項目數（批次推論時會再加上批次大小）。
   static const prefetch = 3;
 
   /// 進度回報的最短間隔：每張都查詢資料庫計數會拖慢索引。
@@ -204,7 +205,7 @@ class IndexingService {
           faceDone: base.faceDone + faceDone,
           running: true,
           msPerItem: timed == 0 ? null : clock.elapsedMilliseconds ~/ timed,
-          timing: steps.describe(embedder?.threads),
+          timing: steps.describe(embedder?.tuning.label),
         ),
       );
     }
@@ -245,26 +246,34 @@ class IndexingService {
             photosOnly: photosOnly,
           );
           if (batch.isEmpty) break;
-          // 推論一張的同時，預先準備後面 [prefetch] 張（讀圖與解碼在原生執行緒並行）。
+          // 推論的同時預先準備後面的項目（讀圖與解碼在原生執行緒並行）；
+          // 批次推論時一次取 [group] 個項目送進模型。
+          final group = embedder.tuning.batch;
+          final ahead = prefetch + group - 1;
           final queue = Queue<Future<_Prepared>>();
           var nextIndex = 0;
           void fill() {
-            while (queue.length < prefetch && nextIndex < batch.length) {
+            while (queue.length < ahead && nextIndex < batch.length) {
               queue.add(prepare(batch[nextIndex++]));
             }
           }
 
           fill();
           while (queue.isNotEmpty) {
-            final current = await queue.removeFirst();
-            fill();
-            if (await _embed(current, embedder, steps)) {
-              done++;
-            } else {
-              failed++;
+            final current = <_Prepared>[];
+            while (current.length < group && queue.isNotEmpty) {
+              current.add(await queue.removeFirst());
+              fill();
             }
-            timed++;
-            steps.items++;
+            for (final ok in await _embed(current, embedder, steps)) {
+              if (ok) {
+                done++;
+              } else {
+                failed++;
+              }
+              timed++;
+              steps.items++;
+            }
             report();
             if (await stopped()) break;
           }
@@ -333,43 +342,61 @@ class IndexingService {
           faceTotal: last.faceTotal,
           faceDone: last.faceDone,
           msPerItem: timed == 0 ? null : clock.elapsedMilliseconds ~/ timed,
-          timing: steps.describe(embedder?.threads),
+          timing: steps.describe(embedder?.tuning.label),
         ),
       );
     }
     return completed;
   }
 
-  Future<bool> _embed(
-    _Prepared p,
+  /// 推論並寫入一組已準備好的項目（影片的多個畫面與批次裡的相片一起送進模型）；
+  /// 回傳各項目是否成功。
+  Future<List<bool>> _embed(
+    List<_Prepared> group,
     EmbeddingService embedder,
     _StepTimes steps,
   ) async {
+    final sw = Stopwatch()..start();
+    List<Float32List?> vectors;
     try {
-      final sw = Stopwatch()..start();
-      final vectors = <Float32List>[];
-      for (final image in p.images) {
-        final v = await embedder.embedPrepared(image);
-        if (v != null) vectors.add(v);
-      }
-      steps.infer += sw.elapsedMicroseconds;
-      if (vectors.isEmpty) {
-        await store.markFailed(p.record.id);
-        return false;
-      }
-      sw.reset();
-      await store.saveEmbeddings(
-        p.record.id,
-        vectors,
-        embedder.version,
-        sharpness: p.record.isVideo ? null : p.images.first.sharpness,
-      );
-      steps.save += sw.elapsedMicroseconds;
-      return true;
+      vectors = await embedder.embedPreparedAll([
+        for (final p in group) ...p.images,
+      ]);
     } on Object {
-      await store.markFailed(p.record.id);
-      return false;
+      vectors = const [];
     }
+    steps.infer += sw.elapsedMicroseconds;
+    sw.reset();
+
+    final results = <bool>[];
+    var offset = 0;
+    for (final p in group) {
+      final mine = <Float32List>[];
+      for (var i = 0; i < p.images.length; i++) {
+        final v = offset + i < vectors.length ? vectors[offset + i] : null;
+        if (v != null) mine.add(v);
+      }
+      offset += p.images.length;
+      try {
+        if (mine.isEmpty) {
+          await store.markFailed(p.record.id);
+          results.add(false);
+          continue;
+        }
+        await store.saveEmbeddings(
+          p.record.id,
+          mine,
+          embedder.version,
+          sharpness: p.record.isVideo ? null : p.images.first.sharpness,
+        );
+        results.add(true);
+      } on Object {
+        await store.markFailed(p.record.id);
+        results.add(false);
+      }
+    }
+    steps.save += sw.elapsedMicroseconds;
+    return results;
   }
 
   static const _defaultSpec = PreprocessSpec(

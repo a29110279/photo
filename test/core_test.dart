@@ -157,6 +157,28 @@ void main() {
       final r = await SearchService(store, parser: parser).search('夏天');
       expect(r.hits.map((h) => h.asset.id).toSet(), {'jp', 'tw'});
     });
+
+    test('排除條件：符合排除內容的項目依同一個門檻剔除', () async {
+      final svc = SearchService(store, parser: parser);
+      // 「山」→ [0,1]：jp（其中一幀）與 mt 都很像，tw 只有 0.45。
+      final r = await svc.search('海邊 不要山', embedText: embed, modelVersion: 'm1', dim: 2);
+      expect(r.query.exclude, ['山']);
+      expect(r.usesThreshold, isTrue);
+      expect(r.above(0.5).map((h) => h.asset.id), ['tw']);
+      // 門檻調高後，排除也跟著變寬鬆；jp 的排除分數是 1.0，仍被剔除。
+      expect(r.above(0.8).map((h) => h.asset.id), ['tw']);
+
+      // 只有 metadata 條件時也能排除；刪除項目後仍保留排除資訊。
+      final meta = await svc.search('去年 不要山', embedText: embed, modelVersion: 'm1', dim: 2);
+      expect(meta.isSemantic, isFalse);
+      expect(meta.above(0.5).map((h) => h.asset.id), ['tw']);
+      expect(meta.withHits(meta.hits).above(0.5).map((h) => h.asset.id), ['tw']);
+
+      // 模型尚未就緒：無法排除，照常回傳。
+      final plain = await svc.search('去年 不要山');
+      expect(plain.usesThreshold, isFalse);
+      expect(plain.hits.map((h) => h.asset.id).toSet(), {'jp', 'tw'});
+    });
   });
 
   test('ModelManifest 解析與必要檔案檢查', () {

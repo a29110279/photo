@@ -34,6 +34,7 @@ class ModelManifest {
     required this.centerCrop,
     required this.contextLength,
     required this.files,
+    this.imageBatch = 1,
   });
 
   factory ModelManifest.fromJson(Map<String, dynamic> j) {
@@ -59,6 +60,7 @@ class ModelManifest {
       centerCrop: j['centerCrop'] as bool? ?? false,
       contextLength: j['contextLength'] as int,
       files: files,
+      imageBatch: ((j['imageBatch'] as int?) ?? 1).clamp(1, 16),
     );
   }
 
@@ -72,6 +74,13 @@ class ModelManifest {
   final bool centerCrop;
   final int contextLength;
   final Map<String, ModelFile> files;
+
+  /// 影像模型一次可推論的張數上限（匯出時已確認準確度）；1 表示只能逐張。
+  final int imageBatch;
+
+  /// 檔案內容是否與 [other] 相同（以 sha256 比對）。
+  bool sameFiles(ModelManifest other) =>
+      fileKeys.every((k) => files[k]!.sha256 == other.files[k]!.sha256);
 
   int get totalSize => files.values.fold(0, (a, f) => a + f.size);
 }
@@ -118,7 +127,7 @@ class ModelService {
     }
   }
 
-  /// 確保內建模型已解出；版本相同則直接回傳。安裝檔未內建模型時回傳 null。
+  /// 確保內建模型已解出；版本與檔案都相同則直接回傳。安裝檔未內建模型時回傳 null。
   /// [onProgress] 回報 0~1。
   Future<InstalledModel?> ensureBundled(
     AssetBundle bundle, {
@@ -137,7 +146,10 @@ class ModelService {
       jsonDecode(raw) as Map<String, dynamic>,
     );
     final current = await installed();
-    if (current != null && current.manifest.version == manifest.version) {
+    // 版本相同但檔案不同（例如重新匯出、輸出不變）：只換檔案，已建立的索引仍可用。
+    if (current != null &&
+        current.manifest.version == manifest.version &&
+        current.manifest.sameFiles(manifest)) {
       return current;
     }
 

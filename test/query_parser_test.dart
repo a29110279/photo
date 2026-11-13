@@ -119,4 +119,38 @@ void main() {
     );
     expect(parser.parse('冬天的雪景').without(QueryPart.semantic).toPrompt(), '冬天');
   });
+
+  test('排除條件：不要、沒有、排除、減號', () {
+    var q = parser.parse('海邊 不要有人');
+    expect(q.semantic, '海邊');
+    expect(q.exclude, ['人']);
+
+    q = parser.parse('沒有人的海邊');
+    expect(q.semantic, '海邊');
+    expect(q.exclude, ['人']);
+
+    q = parser.parse('除了狗以外的寵物');
+    expect(q.semantic, '寵物');
+    expect(q.exclude, ['狗']);
+
+    q = parser.parse('去年日本 -截圖 排除文字');
+    expect(q.exclude, ['截圖', '文字']);
+    expect(q.semantic, '');
+    expect(q.place?.name, '日本');
+    expect(q.from, DateTime(2025));
+
+    // 日期裡的連字號不是排除。
+    q = parser.parse('2023-05-03 的照片');
+    expect(q.exclude, isEmpty);
+    expect(q.from, DateTime(2023, 5, 3));
+  });
+
+  test('排除條件可個別移除，並能組回提示詞', () {
+    final q = parser.parse('海邊 不要有人 不要車');
+    expect(q.toPrompt(), '海邊 不要人 不要車');
+    expect(parser.parse(q.toPrompt()).exclude, ['人', '車']);
+    final one = q.without(QueryPart.exclude, term: '人');
+    expect(one.exclude, ['車']);
+    expect(one.semantic, '海邊');
+  });
 }

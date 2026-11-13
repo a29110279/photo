@@ -25,6 +25,8 @@ from transformers import ChineseCLIPModel, ChineseCLIPProcessor
 from model_check import Reference, encode_image
 
 CONTEXT_LENGTH = 52
+# 影像一次推論的張數上限（App 會實測，較快才使用）。
+IMAGE_BATCH = 4
 
 
 class ImageEncoder(torch.nn.Module):
@@ -106,7 +108,9 @@ def main():
     with torch.no_grad():
         torch.onnx.export(
             ImageEncoder(model), torch.zeros(1, 3, size, size), str(raw["image"]),
-            input_names=["image"], output_names=["image_features"], opset_version=17, dynamo=False)
+            input_names=["image"], output_names=["image_features"], opset_version=17, dynamo=False,
+            # 影像模型可一次推論多張（索引時批次處理）。
+            dynamic_axes={"image": {0: "batch"}, "image_features": {0: "batch"}})
         torch.onnx.export(
             TextEncoder(model, tok.pad_token_id),
             torch.zeros(1, CONTEXT_LENGTH, dtype=torch.long), str(raw["text"]),
@@ -141,6 +145,19 @@ def main():
                 continue
         raw[key].replace(final[key])
     print("採用：", chosen)
+
+    # 批次推論：確認一次送多張時與原始模型仍夠接近，通過才在 manifest 標示可用的批次大小。
+    image_batch = 1
+    if ref is not None:
+        try:
+            batch_min = min(ref.batch_scores(final["image"], IMAGE_BATCH))
+            print(f"image 批次 {IMAGE_BATCH}: min cos {batch_min:.4f}")
+            if batch_min >= args.min_cos:
+                image_batch = IMAGE_BATCH
+            else:
+                print("批次推論低於門檻，App 將逐張推論")
+        except Exception as e:  # noqa: BLE001 - 不支援批次時逐張推論即可
+            print(f"批次推論不可用：{e}")
     vocab = dict(sorted(tok.get_vocab().items(), key=lambda kv: kv[1]))
     final["vocab"].write_text("\n".join(vocab.keys()) + "\n", encoding="utf-8")
 
@@ -151,6 +168,7 @@ def main():
         "version": version,
         "embeddingDim": model.config.projection_dim,
         "imageSize": size,
+        "imageBatch": image_batch,
         "mean": list(ip.image_mean),
         "std": list(ip.image_std),
         "centerCrop": bool(getattr(ip, "do_center_crop", False)),

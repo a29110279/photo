@@ -32,6 +32,10 @@ Flutter（iOS / Android），個人使用。完整規劃見 [docs/project-evalua
 | O10 截圖、螢幕錄影、模糊照片清理 | 已實作 | `lib/ui/cleanup_page.dart`（清晰度在索引時一併計算） |
 | O11 事件自動分群（時間 + GPS） | 已實作 | `lib/services/event_service.dart`、相簿 › 事件 |
 | O12 人物分群（選用，設定中開啟） | 已實作 | `lib/services/face_service.dart`、`lib/services/people_service.dart`、相簿 › 人物 |
+| 排除條件（「海邊 不要有人」） | 已實作 | `lib/services/query_parser.dart`、`SearchService`（與排除內容的相似度達到相關度門檻者剔除） |
+| 搜尋結果排序（相關度／時間）與依月份分組 | 已實作 | `lib/state/providers.dart` 的 `SearchSort`、`lib/ui/search_page.dart` |
+| 整理 › 佔空間（最大的檔案） | 已實作（僅 Android） | `lib/data/media_sizes.dart`、`NativeMediaPlugin.kt` |
+| 推論設定自動測速（執行緒、XNNPACK、批次） | 已實作 | `EmbeddingService.load`；批次需模型 manifest 的 `imageBatch` |
 
 與評估文件的差異：
 
@@ -134,6 +138,10 @@ bash tools/dev_setup.sh
 | 15 | 設定 › 開啟人物分群 → 等索引完成 → 相簿 › 人物 → 命名 → 搜尋該名字 | 同一人的相片在同一組；命名後搜尋只出現此人；兩組取相同名字會合併 |
 | 16 | 切到背景一段時間（含影片、OCR 待處理時） | 回來後影片與 OCR 的進度也有增加（背景引擎可使用 native_media 外掛） |
 | 17 | 沒有新增照片時重開 App | 「讀取媒體庫」幾乎立即結束（媒體庫指紋未變，略過完整列舉） |
+| 18 | 搜尋「海邊 不要有人」 | 出現「排除：人」標籤；有人的照片減少；按標籤的 X 後恢復 |
+| 19 | 搜尋結果右上的排序 → 依時間 | 結果依月份分組；只有日期／地點條件的搜尋一律依時間 |
+| 20 | 整理 › 佔空間 | 由最大的檔案排起並顯示大小；選取後顯示合計大小 |
+| 21 | 更新後首次啟動，看設定頁的耗時明細 | 括號內顯示執行緒數；若較快會多出「XNNPACK」或「批次 4」 |
 
 另外建議觀察：1 萬張索引的總時間與耗電、搜尋回應時間（目標 1 秒內）、相似分群在「全部比對」模式的耗時。
 

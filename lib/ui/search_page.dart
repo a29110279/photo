@@ -157,7 +157,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               icon: Icons.hourglass_bottom,
             ),
           if (result != null) _QueryChips(result, onRemove: _removeCondition),
-          if (result != null && result.isSemantic)
+          if (result != null && result.usesThreshold)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 12, 0),
               child: Row(
@@ -200,6 +200,29 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                     style: Theme.of(context).textTheme.labelLarge,
                   ),
                   const Spacer(),
+                  PopupMenuButton<SearchSort>(
+                    tooltip: '排序',
+                    icon: const Icon(Icons.sort),
+                    onSelected: ctrl.setSort,
+                    itemBuilder: (_) {
+                      // 沒有語意分數的結果只能依時間排；此時「相關度」等同新到舊。
+                      final current = s.byTime && s.sort == SearchSort.relevance
+                          ? SearchSort.newest
+                          : s.sort;
+                      return [
+                        for (final (value, label) in [
+                          if (result.isSemantic) (SearchSort.relevance, '依相關度'),
+                          (SearchSort.newest, '依時間：新到舊'),
+                          (SearchSort.oldest, '依時間：舊到新'),
+                        ])
+                          CheckedPopupMenuItem(
+                            value: value,
+                            checked: current == value,
+                            child: Text(label),
+                          ),
+                      ];
+                    },
+                  ),
                   PopupMenuButton<String>(
                     tooltip: '選取',
                     icon: const Icon(Icons.checklist),
@@ -240,25 +263,11 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                         : '沒有符合條件的項目\n'
                               '媒體庫共 ${index.photos} 張相片、${index.videos} 部影片',
                   )
-                : GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 12, 96),
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                          maxCrossAxisExtent: 128,
-                          mainAxisSpacing: 6,
-                          crossAxisSpacing: 6,
-                        ),
-                    itemCount: visible.length,
-                    itemBuilder: (_, i) {
-                      final h = visible[i];
-                      return AssetTile(
-                        key: ValueKey(h.asset.id),
-                        assetId: h.asset.id,
-                        selected: s.selected.contains(h.asset.id),
-                        badge: h.score?.toStringAsFixed(2),
-                        onTap: () => ctrl.toggle(h.asset.id),
-                      );
-                    },
+                : _ResultGrid(
+                    hits: visible,
+                    selected: s.selected,
+                    byTime: s.byTime,
+                    onTap: ctrl.toggle,
                   ),
           ),
         ],
@@ -431,6 +440,72 @@ class _EmptyResult extends StatelessWidget {
   );
 }
 
+/// 搜尋結果格線；依時間排列時按月份分組。
+class _ResultGrid extends StatelessWidget {
+  const _ResultGrid({
+    required this.hits,
+    required this.selected,
+    required this.byTime,
+    required this.onTap,
+  });
+
+  final List<SearchHit> hits;
+  final Set<String> selected;
+  final bool byTime;
+  final ValueChanged<String> onTap;
+
+  static const _delegate = SliverGridDelegateWithMaxCrossAxisExtent(
+    maxCrossAxisExtent: 128,
+    mainAxisSpacing: 6,
+    crossAxisSpacing: 6,
+  );
+
+  Widget _tile(SearchHit h) => AssetTile(
+    key: ValueKey(h.asset.id),
+    assetId: h.asset.id,
+    selected: selected.contains(h.asset.id),
+    badge: h.score?.toStringAsFixed(2),
+    onTap: () => onTap(h.asset.id),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    if (!byTime) {
+      return GridView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 4, 12, 96),
+        gridDelegate: _delegate,
+        itemCount: hits.length,
+        itemBuilder: (_, i) => _tile(hits[i]),
+      );
+    }
+    final title = Theme.of(context).textTheme.titleSmall;
+    return CustomScrollView(
+      slivers: [
+        for (final g in groupByMonth(hits)) ...[
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+              child: Text(
+                '${g.year} 年 ${g.month} 月・${g.hits.length} 個',
+                style: title,
+              ),
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 12, 6),
+            sliver: SliverGrid.builder(
+              gridDelegate: _delegate,
+              itemCount: g.hits.length,
+              itemBuilder: (_, i) => _tile(g.hits[i]),
+            ),
+          ),
+        ],
+        const SliverToBoxAdapter(child: SizedBox(height: 96)),
+      ],
+    );
+  }
+}
+
 /// 尚未搜尋時的說明與範例（點一下直接搜尋）。
 class _Hint extends StatelessWidget {
   const _Hint({required this.onPick});
@@ -441,6 +516,7 @@ class _Hint extends StatelessWidget {
     '上個月在台北拍的影片',
     '2023年5月 貓',
     '寫著「發票」的照片',
+    '海邊 不要有人',
     '夜景',
     '生日蛋糕',
   ];
@@ -471,7 +547,8 @@ class _Hint extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             child: Text(
               '可以同時描述時間、地點、類型與內容，'
-              '用引號指定相片中的文字，或輸入已命名的人物。\n\n'
+              '用引號指定相片中的文字、輸入已命名的人物，'
+              '或用「不要…」排除不想看到的內容。\n\n'
               '點縮圖可選取，長按可預覽；預覽頁右上角可「找相似」。',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
@@ -520,6 +597,8 @@ class _QueryChips extends StatelessWidget {
             '文字「$t」',
             () => onRemove(QueryPart.text, term: t),
           ),
+        for (final t in q.exclude)
+          (Icons.block, '排除：$t', () => onRemove(QueryPart.exclude, term: t)),
         if (q.semantic.isNotEmpty)
           (
             Icons.auto_awesome_outlined,

@@ -3,29 +3,33 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 
 import '../data/local_store.dart';
+import '../data/media_sizes.dart';
 import '../state/providers.dart';
 import 'asset_widgets.dart';
 
-/// 整理：相似照片（O6）、截圖與螢幕錄影、模糊照片（O10）。
+/// 整理：相似照片（O6）、截圖與螢幕錄影、模糊照片（O10）、最佔空間的項目。
 class CleanupPage extends StatelessWidget {
   const CleanupPage({super.key});
 
   @override
   Widget build(BuildContext context) => DefaultTabController(
-    length: 3,
+    length: 4,
     child: Scaffold(
       appBar: AppBar(
         title: const Text('整理'),
         bottom: const TabBar(
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
           tabs: [
             Tab(text: '相似照片'),
             Tab(text: '截圖與錄影'),
             Tab(text: '模糊照片'),
+            Tab(text: '佔空間'),
           ],
         ),
       ),
       body: const TabBarView(
-        children: [_SimilarTab(), _ScreenshotTab(), _BlurTab()],
+        children: [_SimilarTab(), _ScreenshotTab(), _BlurTab(), _LargestTab()],
       ),
     ),
   );
@@ -264,6 +268,27 @@ class _BlurTab extends ConsumerWidget {
   );
 }
 
+/// 最佔空間的相片與影片，由大到小。
+class _LargestTab extends ConsumerWidget {
+  const _LargestTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sizes = ref.watch(mediaSizesProvider).value ?? const <String, int>{};
+    return _PickAndTrash(
+      provider: largestProvider,
+      emptyText: '沒有可顯示的項目（此功能目前只支援 Android）',
+      hint: '由最大的檔案開始排列，最多顯示 300 個。影片通常最佔空間，刪除前可長按預覽。',
+      badge: (a) => switch (sizes[a.id]) {
+        final int b => formatBytes(b),
+        null => null,
+      },
+      selectedInfo: (ids) =>
+          formatBytes(ids.fold(0, (sum, id) => sum + (sizes[id] ?? 0))),
+    );
+  }
+}
+
 /// 可多選並刪除的縮圖清單。
 class _PickAndTrash extends ConsumerStatefulWidget {
   const _PickAndTrash({
@@ -271,12 +296,16 @@ class _PickAndTrash extends ConsumerStatefulWidget {
     required this.emptyText,
     required this.hint,
     this.badge,
+    this.selectedInfo,
   });
 
   final ProviderListenable<AsyncValue<List<AssetRecord>>> provider;
   final String emptyText;
   final String hint;
   final String? Function(AssetRecord)? badge;
+
+  /// 選取項目的補充說明（例如總大小），顯示在已選數量後面。
+  final String Function(Set<String> selected)? selectedInfo;
 
   @override
   ConsumerState<_PickAndTrash> createState() => _PickAndTrashState();
@@ -312,7 +341,10 @@ class _PickAndTrashState extends ConsumerState<_PickAndTrash> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.only(left: 12),
-                    child: Text('${items.length} 個・已選 ${_selected.length}'),
+                    child: Text(
+                      '${items.length} 個・已選 ${_selected.length}'
+                      '${_selected.isEmpty || widget.selectedInfo == null ? '' : '（${widget.selectedInfo!(_selected)}）'}',
+                    ),
                   ),
                   const Spacer(),
                   TextButton(
