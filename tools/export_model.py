@@ -35,8 +35,36 @@ class ImageEncoder(torch.nn.Module):
         self.model = model
 
     def forward(self, image):
-        # 輸入解析度低於原生的 224 時，位置編碼會在匯出時內插並固定在模型內。
         return encode_image(self.model, image)
+
+
+def bake_image_size(model, size):
+    """把位置編碼內插成 size 的大小並寫回模型，之後就以這個解析度為原生解析度。
+
+    若在匯出時才內插，圖裡會留下一個 Resize（cubic）節點；支援批次（動態軸）後
+    它不會被常數折疊掉，而手機上的 ONNX Runtime 1.15 執行這個節點會失敗。
+    """
+    emb = model.vision_model.embeddings
+    if size == emb.image_size:
+        return
+    n = (size // emb.patch_size) ** 2 + 1
+    with torch.no_grad():
+        pos = emb.interpolate_pos_encoding(torch.zeros(1, n, emb.embed_dim), size, size)[0]
+    emb.position_embedding = torch.nn.Embedding.from_pretrained(pos.clone(), freeze=True)
+    emb.register_buffer("position_ids", torch.arange(n).expand((1, -1)), persistent=False)
+    emb.image_size = size
+    emb.num_patches = n - 1
+    emb.num_positions = n
+    model.config.vision_config.image_size = size
+
+
+def forbid_ops(path, ops=("Resize",)):
+    """確認圖裡沒有手機上的舊版 ONNX Runtime 跑不動的運算。"""
+    import onnx
+    found = sorted({n.op_type for n in onnx.load(str(path), load_external_data=False).graph.node
+                    if n.op_type in ops})
+    if found:
+        raise SystemExit(f"{path} 含有不支援的運算：{found}")
 
 
 class TextEncoder(torch.nn.Module):
@@ -105,6 +133,7 @@ def main():
     ref = Reference(model, processor, CONTEXT_LENGTH, image_size=size) if args.quantize else None
 
     raw = {"image": args.out / "image.fp32.onnx", "text": args.out / "text.fp32.onnx"}
+    bake_image_size(model, size)
     with torch.no_grad():
         torch.onnx.export(
             ImageEncoder(model), torch.zeros(1, 3, size, size), str(raw["image"]),
@@ -116,6 +145,7 @@ def main():
             torch.zeros(1, CONTEXT_LENGTH, dtype=torch.long), str(raw["text"]),
             input_names=["text"], output_names=["text_features"], opset_version=17, dynamo=False)
 
+    forbid_ops(raw["image"])
     final = {"image": args.out / "image", "text": args.out / "text", "vocab": args.out / "vocab"}
     chosen = {}
     for key in ("image", "text"):

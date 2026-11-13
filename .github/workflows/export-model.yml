@@ -10,6 +10,7 @@ on:
       - 'tools/export_model.py'
       - 'tools/verify_model.py'
       - 'tools/model_check.py'
+      - 'tools/device_runtime_check.py'
       - 'tools/requirements.txt'
       - 'lib/services/bert_tokenizer.dart'
       - 'test/tokenizer_vocab_test.dart'
@@ -40,6 +41,20 @@ jobs:
 
       - name: Verify ONNX against PyTorch
         run: python tools/verify_model.py --model-dir dist/model --cases dist/tokenizer_cases.json
+
+      # App 內的 ONNX Runtime 是 1.15.1（Dart 套件 onnxruntime 1.4.1），比上面匯出用的版本舊很多；
+      # 用同一個版本實際跑一次，跑不動就不產出模型，避免把手機上無法載入的模型包進 APK。
+      - uses: actions/setup-python@v5
+        id: py311
+        with:
+          python-version: '3.11'
+          update-environment: false
+
+      - name: Run the package on the phone's ONNX Runtime version
+        run: |
+          "${{ steps.py311.outputs.python-path }}" -m venv ort-device
+          ort-device/bin/pip install -q "numpy<2" "onnxruntime==1.15.1"
+          ort-device/bin/python tools/device_runtime_check.py --model-dir dist/model
 
       - uses: subosito/flutter-action@v2
         with:
