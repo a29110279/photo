@@ -135,5 +135,19 @@ void main() {
       expect((await store.pendingFaces()).map((a) => a.id), ['a0']);
       expect((await store.faceStats()).faces, 7);
     });
+
+    test('診斷數字：失敗、人臉、群數；失敗的可重試', () async {
+      await store.saveFaces('c0', const [], failed: true);
+      await people.people();
+      final d = await store.faceDiagnostics();
+      expect(
+        (d.done, d.failed, d.faces, d.photos, d.clusters, d.largest),
+        (8, 1, 7, 7, 2, 4),
+      );
+
+      expect(await store.retryFailedFaces(), 1);
+      expect((await store.pendingFaces()).map((a) => a.id), ['c0']);
+      expect((await store.faceDiagnostics()).failed, 0);
+    });
   });
 }

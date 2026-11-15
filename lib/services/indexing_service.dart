@@ -438,8 +438,14 @@ class IndexingService {
       await store.saveFaces(rec.id, [
         for (final f in found) (box: f.box.encode(), vec: f.vector),
       ]);
-    } on Object {
+    } on Object catch (e) {
       await store.saveFaces(rec.id, const [], failed: true);
+      // 留下錯誤訊息：全部失敗時通常是同一個原因（例如模型在這支手機上跑不動）。
+      final text = '$e';
+      await store.setSetting(
+        SettingKeys.faceLastError,
+        text.length > 300 ? text.substring(0, 300) : text,
+      );
     }
   }
 

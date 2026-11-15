@@ -12,4 +12,7 @@ abstract final class SettingKeys {
 
   /// 上次人物分群時的人臉數量與最大 id。
   static const faceClusterStamp = 'face_cluster_stamp';
+
+  /// 最近一次人臉處理失敗的錯誤訊息（顯示在人物頁，協助判斷原因）。
+  static const faceLastError = 'face_last_error';
 }

@@ -315,6 +315,16 @@ final peopleProvider = FutureProvider.autoDispose<List<Person>>(
   (ref) => ref.watch(peopleServiceProvider).people(),
 );
 
+/// 人物分群的現況數字（沒有結果時顯示）。在分群完成後才讀取。
+final faceDiagnosticsProvider = FutureProvider.autoDispose((ref) async {
+  await ref.watch(peopleProvider.future);
+  final store = ref.watch(storeProvider);
+  return (
+    counts: await store.faceDiagnostics(),
+    lastError: await store.getSetting(SettingKeys.faceLastError),
+  );
+});
+
 // ---- 搜尋（C6/C8/C11/O2） ----
 
 /// 搜尋結果的排列方式。

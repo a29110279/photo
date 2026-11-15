@@ -562,6 +562,59 @@ class EventPage extends ConsumerWidget {
 
 // ---- 人物（O12） ----
 
+/// 沒有人物可顯示時，列出目前的處理數字，方便判斷卡在哪一步。
+class _NoPeople extends ConsumerWidget {
+  const _NoPeople();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final d = ref.watch(faceDiagnosticsProvider).value;
+    final small = Theme.of(context).textTheme.bodySmall;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('還沒有找到出現在 3 張以上相片的人物。', textAlign: TextAlign.center),
+            if (d != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                '已處理 ${d.counts.done} 張相片（${d.counts.failed} 張處理失敗）\n'
+                '找到 ${d.counts.faces} 張人臉，分布在 ${d.counts.photos} 張相片\n'
+                '分成 ${d.counts.clusters} 群，最大的一群有 ${d.counts.largest} 張相片',
+                textAlign: TextAlign.center,
+                style: small,
+              ),
+              if (d.counts.failed > 0) ...[
+                if (d.lastError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '最近的錯誤：${d.lastError}',
+                    textAlign: TextAlign.center,
+                    style: small?.copyWith(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () async {
+                    await ref.read(storeProvider).retryFailedFaces();
+                    ref.invalidate(peopleProvider);
+                    await ref.read(indexProvider.notifier).autoIndex();
+                  },
+                  child: Text('重試失敗的 ${d.counts.failed} 張'),
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _PeopleList extends ConsumerWidget {
   const _PeopleList();
 
@@ -584,15 +637,7 @@ class _PeopleList extends ConsumerWidget {
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(child: Text('$e')),
           data: (people) => people.isEmpty
-              ? const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text(
-                      '還沒有找到出現在 3 張以上相片的人物，索引完成後再來看看。',
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                )
+              ? const _NoPeople()
               : GridView.builder(
                   padding: const EdgeInsets.all(8),
                   gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(

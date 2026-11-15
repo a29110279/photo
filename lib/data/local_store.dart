@@ -450,6 +450,42 @@ CREATE TABLE people(
     return rows.map(_toRecord).toList();
   }
 
+  /// 人物分群的現況，用來判斷「沒有結果」卡在哪一步：
+  /// 已處理／失敗的相片數、人臉數、有人臉的相片數、群數、最大一群的相片數。
+  Future<
+    ({int done, int failed, int faces, int photos, int clusters, int largest})
+  >
+  faceDiagnostics() async {
+    Future<int> count(String sql, [List<Object?>? args]) async =>
+        Sqflite.firstIntValue(await db.rawQuery(sql, args)) ?? 0;
+    const photos = 'FROM assets WHERE is_video = 0 AND screenshot = 0';
+    return (
+      done: await count('SELECT COUNT(*) $photos AND face_state <> ?', [
+        IndexState.pending,
+      ]),
+      failed: await count('SELECT COUNT(*) $photos AND face_state = ?', [
+        IndexState.failed,
+      ]),
+      faces: await count('SELECT COUNT(*) FROM faces'),
+      photos: await count('SELECT COUNT(DISTINCT asset_id) FROM faces'),
+      clusters: await count(
+        'SELECT COUNT(DISTINCT cluster) FROM faces WHERE cluster IS NOT NULL',
+      ),
+      largest: await count(
+        'SELECT MAX(n) FROM (SELECT COUNT(DISTINCT asset_id) AS n FROM faces '
+        'WHERE cluster IS NOT NULL GROUP BY cluster)',
+      ),
+    );
+  }
+
+  /// 把人臉處理失敗的相片改回待處理，下次索引時重試；回傳筆數。
+  Future<int> retryFailedFaces() => db.update(
+    'assets',
+    {'face_state': IndexState.pending},
+    where: 'face_state = ?',
+    whereArgs: [IndexState.failed],
+  );
+
   Future<({int total, int done, int faces})> faceStats() async {
     final r = (await db.rawQuery(
       'SELECT COUNT(*) AS total, '
